@@ -6,7 +6,7 @@
 
 ### How does it work?
 
-A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-v3-large-turbo), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (Gemini 2.0 Flash) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmovie command to remove the segments from the original audio file, then return the cleaned audio file to the user.
+A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-v3-large-turbo), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (Gemini 2.0 Flash) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmpeg command to remove the segments from the original audio file, then return the cleaned audio file to the user.
 
 ### How much does it cost?
 

@@ -6,11 +6,11 @@
 
 ### How does it work?
 
-A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-v3-large-turbo), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (Gemini 2.0 Flash) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmpeg command to remove the segments from the original audio file, then return the cleaned audio file to the user.
+A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-V3-Large), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (gpt-5-mini) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmpeg command to remove the segments from the original audio file, and return the cleaned audio file to the user.
 
 ### How much does it cost?
 
-Whisper is billed at $0.0009 per audio minute (billed per second), and Gemini 2.0 Flash is billed at $0.40 per million output tokens ($0.0000004 per token), so for an hour long podcast, the process is billed at around 0.11 USD.
+Whisper is billed at $0.0015 per audio minute (billed per second), and gpt-5-mini is billed at $0.25 per million input tokens ($0.00000025 per token), so for an hour long podcast, the process is billed at around ~$0.093 USD (Whisper $0.09 + ~12k input tokens ≈ $0.003).
 
 ### Usage with Docker (recommended)
 
@@ -32,10 +32,12 @@ Copy the `.env.example` file to `.env`:
 cp .env.example .env
 ```
 
-1. Make sure you have an Gemini API key, as an environment variable called `GEMINI_API_KEY` in the `.env` file.
+1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
 2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
 3. Set any rate limits you want in the `.env` file (optional).
-4. Build the and run the Docker image:
+4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
+5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
+6. Build the containers and run them:
 
 ```bash
 docker compose up -d --build
@@ -72,9 +74,11 @@ Fill out the .env file by copying the .env.example file:
 cp .env.example .env
 ```
 
-1. Make sure you have an Gemini API key, as an environment variable called `GEMINI_API_KEY` in the `.env` file.
+1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
 2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
 3. Set any rate limits you want in the `.env` file (optional).
+4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
+5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
 
 ##### backend
 
@@ -82,7 +86,8 @@ Install the dependencies:
 
 ```bash
 cd backend
-pip install -r requirements.txt
+uv venv
+uv pip install -r requirements.txt
 ```
 
 Run the backend:
@@ -97,13 +102,13 @@ Install the dependencies:
 
 ```bash
 cd frontend
-npm install
+bun install
 ```
 
 Run the frontend:
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 ### License

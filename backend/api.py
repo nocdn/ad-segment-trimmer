@@ -18,10 +18,14 @@ app = Flask(__name__)
 CORS(app)
 
 # getting keys from .env
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
+REASONING_EFFORT = os.environ.get("REASONING_EFFORT")
 FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY")
-print("GEMINI_API_KEY from .env", GEMINI_API_KEY)
+print("OPENAI_API_KEY from .env", OPENAI_API_KEY)
 print("FIREWORKS_API_KEY from .env", FIREWORKS_API_KEY)
+print("OPENAI_MODEL from .env", OPENAI_MODEL)
+print("REASONING_EFFORT from .env", REASONING_EFFORT)
 
 # getting rate limiting from .env
 RATE_LIMITING_ENABLED = os.environ.get("RATE_LIMITING_ENABLED")
@@ -43,8 +47,7 @@ limiter = Limiter(
 
 # create gemini api client
 client = OpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key=OPENAI_API_KEY,
 )
 
 def transcribe(filePath):
@@ -83,20 +86,40 @@ def transcribe(filePath):
     else:
         raise Exception(f"Transcription API error: {response.status_code}, {response.text}")
 
-def geminiGetSegments(transcriptionText):
+def openaiGetSegments(transcriptionText):
     """
-    Uses the Gemini API to extract advertisement segments from the transcript.
+    Uses the OpenAI API to extract advertisement segments from the transcript.
     The response is expected to be an array of segments in JSON text.
     """
-    response = client.chat.completions.create(
-        model="gemini-2.0-flash",
-        n=1,
-        messages=[
-            {"role": "system", "content": "From the provided podcast transcript, please output all of the advertisement segments. Output them verbatim. Output them as an array of strings with each string being a segment. If a segment is repeated exactly in another part of the transcript, only output it once. DO NOT OUTPUT THEM IN ANY CODEBLOCKS OR BACKTICKS OR ANYTHING, JUST THE ARRAY OF SEGMENTS AS YOUR RESPONSE.  This is going into a safety-critical system so it cannot have any code blocks or backticks. Do not change the segments' case, punctuation or capitalization."},
-            {"role": "user", "content": transcriptionText}
-        ]
+    response = client.responses.create(
+        model=OPENAI_MODEL,
+        input=[
+            {
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "From the provided podcast transcript, please output all of the advertisement segments. Output them verbatim. Output them as an array of strings with each string being a segment. If a segment is repeated exactly in another part of the transcript, only output it once. DO NOT OUTPUT THEM IN ANY CODEBLOCKS OR BACKTICKS OR ANYTHING, JUST THE ARRAY OF SEGMENTS AS YOUR RESPONSE.  This is going into a safety-critical system so it cannot have any code blocks or backticks. Do not change the segments' case, punctuation or capitalization."
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": transcriptionText
+                    }
+                ]
+            }
+        ],
+        reasoning={
+            "effort": REASONING_EFFORT,
+            "summary": "auto"
+        },
     )
-    return response.choices[0].message.content
+    print("response: ", response)
+    return response.output[1].content[0].text
 
 def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove):
     """
@@ -216,15 +239,15 @@ def process_audio():
         return jsonify({"error": str(e)}), 500
 
     try:
-        # using gemini to extract advertisement segments
-        phrases_str = geminiGetSegments(transcription_text)
+        # using openai to extract advertisement segments
+        phrases_str = openaiGetSegments(transcription_text)
         try:
             phrases = json.loads(phrases_str)
         except json.JSONDecodeError:
             phrases = []
     except Exception as e:
         os.remove(input_file)
-        return jsonify({"error": f"Error from Gemini: {str(e)}"}), 500
+        return jsonify({"error": f"Error from OpenAI: {str(e)}"}), 500
 
     # find the timestamps of the phrases in the transcript
     matches = find_phrases_timestamps(transcript_words, phrases)

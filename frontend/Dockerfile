@@ -1,16 +1,18 @@
-# File: frontent/Dockerfile
+# File: frontend/Dockerfile
 # Build stage
-FROM node:20-alpine as build
+FROM oven/bun:alpine as build
 
 WORKDIR /app
 
 # Copy and install dependencies
-COPY package*.json ./
-RUN npm install
+COPY package*.json bun.lock* ./
+# Install dependencies first to generate/read lockfile
+RUN bun install && bun pm trust --all
 
 # Copy the rest of the project and build
 COPY . .
-RUN npm run build
+# Ensure esbuild host/binary are in sync before building
+RUN bun pm trust --all && bun run build
 
 # Production stage: serve static files with nginx
 FROM nginx:alpine

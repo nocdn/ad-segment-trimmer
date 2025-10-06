@@ -118,7 +118,6 @@ def openaiGetSegments(transcriptionText):
             "summary": "auto"
         },
     )
-    print("response: ", response)
     return response.output[1].content[0].text
 
 def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove):

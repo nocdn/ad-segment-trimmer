@@ -2,7 +2,9 @@ import os
 import json
 import uuid
 import subprocess
-import requests
+import logging
+import traceback
+
 from io import BytesIO
 from flask import Flask, request, send_file, jsonify
 from flask_limiter import Limiter
@@ -11,11 +13,16 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
+import db
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+db.init_db()
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 # getting keys from .env
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -45,46 +52,39 @@ limiter = Limiter(
     storage_uri="memory://",
 )
 
-# create gemini api client
+# create openai client
 client = OpenAI(
     api_key=OPENAI_API_KEY,
+)
+
+# create fireworks audio client (OpenAI-compatible)
+fireworks_client = OpenAI(
+    base_url="https://audio-turbo.api.fireworks.ai/v1",
+    api_key=FIREWORKS_API_KEY,
 )
 
 def transcribe(filePath):
     """Calls the Fireworks transcription API and returns a tuple (transcription_text, segments, word-level transcript)."""
     with open(filePath, "rb") as file:
-        response = requests.post(
-            "https://audio-prod.us-virginia-1.direct.fireworks.ai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {FIREWORKS_API_KEY}"},
-            files={"file": file},
-            data={
-                "vad_model": "silero",
-                "alignment_model": "tdnn_ffn",
-                "preprocessing": "none",
-                "temperature": "0",
-                "timestamp_granularities": "word,segment",
-                "audio_window_seconds": "5",
-                "speculation_window_words": "4",
-                "response_format": "verbose_json"
-            },
+        response = fireworks_client.audio.transcriptions.create(
+            model="whisper-v3-turbo",
+            file=file,
+            response_format="verbose_json",
+            timestamp_granularities=["word", "segment"],
         )
-    if response.status_code == 200:
-        dict_response = response.json()
-        text = dict_response["text"]
-        segments = dict_response["segments"]
-        words = dict_response["words"]
-        # clean each word, keeping only "word", "start", and "end"
-        cleaned_words = []
-        for word in words:
-            cleaned_word = {
-                "word": word["word"],
-                "start": word["start"],
-                "end": word["end"]
-            }
-            cleaned_words.append(cleaned_word)
-        return text, segments, cleaned_words
-    else:
-        raise Exception(f"Transcription API error: {response.status_code}, {response.text}")
+    text = response.text
+    segments = response.segments
+    words = response.words
+    # clean each word, keeping only "word", "start", and "end"
+    cleaned_words = []
+    for word in words:
+        cleaned_word = {
+            "word": word.word,
+            "start": word.start,
+            "end": word.end
+        }
+        cleaned_words.append(cleaned_word)
+    return text, segments, cleaned_words
 
 def openaiGetSegments(transcriptionText):
     """
@@ -163,7 +163,7 @@ def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove):
 
 def find_phrases_timestamps(transcript_data, phrases):
     """
-    For each phrase from the Gemini response (either a string or list of strings),
+    For each phrase from the OpenAI response (either a string or list of strings),
     find its occurrences in the transcript data (a list of words with timestamps)
     and return a list of (start_time, end_time) tuples.
     """
@@ -225,49 +225,66 @@ def process_audio():
     unique_id = uuid.uuid4().hex
     input_file = os.path.join(uploads_dir, unique_id + "_" + filename)
     file.save(input_file)
+    logger.info(f"Saved uploaded file: {filename} -> {input_file}")
 
     # define the output file name (appending _edited before the extension)
     base, ext = os.path.splitext(input_file)
     output_file = base + "_edited" + ext
 
     try:
-        # firly, transcribe the audio file
+        # first, transcribe the audio file
+        logger.info("Starting transcription...")
         transcription_text, _, transcript_words = transcribe(input_file)
+        logger.info(f"Transcription complete. Text length: {len(transcription_text)}, Words: {len(transcript_words)}")
     except Exception as e:
+        logger.error(f"Transcription failed: {traceback.format_exc()}")
         os.remove(input_file)
         return jsonify({"error": str(e)}), 500
 
     try:
         # using openai to extract advertisement segments
+        logger.info("Sending transcription to OpenAI for ad segment detection...")
         phrases_str = openaiGetSegments(transcription_text)
+        logger.info(f"OpenAI response: {phrases_str[:500]}")
         try:
             phrases = json.loads(phrases_str)
+            logger.info(f"Parsed {len(phrases)} ad segments")
         except json.JSONDecodeError:
+            logger.warning(f"Failed to parse OpenAI response as JSON, treating as no segments")
             phrases = []
     except Exception as e:
+        logger.error(f"OpenAI call failed: {traceback.format_exc()}")
         os.remove(input_file)
         return jsonify({"error": f"Error from OpenAI: {str(e)}"}), 500
 
     # find the timestamps of the phrases in the transcript
     matches = find_phrases_timestamps(transcript_words, phrases)
+    logger.info(f"Found {len(matches)} matching timestamp ranges: {matches}")
     
     # if no matches found, simply copy the file (i.e. nothing to remove)
     if not matches:
+        logger.info("No ad segments found, copying original file")
         cmd = f'cp "{input_file}" "{output_file}"'
     else:
         try:
             cmd = generate_ffmpeg_trim_command(input_file, output_file, matches)
+            logger.info(f"FFmpeg command: {cmd}")
         except Exception as e:
+            logger.error(f"FFmpeg command generation failed: {traceback.format_exc()}")
             os.remove(input_file)
             return jsonify({"error": f"Error generating FFmpeg command: {str(e)}"}), 500
 
     try:
         # execute the FFmpeg command to trim the segments
+        logger.info("Executing FFmpeg...")
         result = subprocess.run(cmd, shell=True, capture_output=True)
         if result.returncode != 0:
+            logger.error(f"FFmpeg failed: {result.stderr.decode()}")
             os.remove(input_file)
             return jsonify({"error": f"FFmpeg command failed: {result.stderr.decode()}"}), 500
+        logger.info("FFmpeg completed successfully")
     except Exception as e:
+        logger.error(f"FFmpeg execution error: {traceback.format_exc()}")
         os.remove(input_file)
         return jsonify({"error": f"Error executing FFmpeg command: {str(e)}"}), 500
 
@@ -286,6 +303,14 @@ def process_audio():
     os.remove(input_file)
     os.remove(output_file)
 
+    # save to history
+    db.add_entry(
+        filename=filename,
+        ad_segments_found=len(matches),
+        ad_segments=phrases if phrases else None,
+        transcription_preview=transcription_text,
+    )
+
     # extract the original filename to then create a new filename from it and not return the uuid
     original_base, _ = os.path.splitext(filename)
     download_filename = original_base + "_edited.mp3"
@@ -297,6 +322,20 @@ def process_audio():
         as_attachment=True,
         mimetype="audio/mpeg"
     )
+
+@app.route("/history", methods=["GET"])
+def get_history():
+    """Returns all processing history entries."""
+    entries = db.get_all_entries()
+    return jsonify(entries)
+
+@app.route("/history/<entry_id>", methods=["DELETE"])
+def delete_history(entry_id):
+    """Deletes a single history entry by ID."""
+    deleted = db.delete_entry(entry_id)
+    if deleted:
+        return jsonify({"message": "Entry deleted"})
+    return jsonify({"error": "Entry not found"}), 404
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=7070)

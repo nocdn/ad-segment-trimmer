@@ -1,6 +1,5 @@
-requests
 openai
 Flask
 flask-cors
 Flask-limiter
-dotenv
+python-dotenv

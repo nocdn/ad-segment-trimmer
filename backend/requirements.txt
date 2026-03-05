@@ -3,3 +3,4 @@ Flask
 flask-cors
 Flask-limiter
 python-dotenv
+psycopg[binary]

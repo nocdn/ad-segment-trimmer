@@ -24,6 +24,12 @@ db.init_db()
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+class ExcludeHistoryGetLogs(logging.Filter):
+    def filter(self, record):
+        return "GET /history" not in record.getMessage()
+
+logging.getLogger("werkzeug").addFilter(ExcludeHistoryGetLogs())
+
 # getting keys from .env
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
@@ -35,22 +41,29 @@ print("OPENAI_MODEL from .env", OPENAI_MODEL)
 print("REASONING_EFFORT from .env", REASONING_EFFORT)
 
 # getting rate limiting from .env
-RATE_LIMITING_ENABLED = os.environ.get("RATE_LIMITING_ENABLED")
+RATE_LIMITING_ENABLED = os.environ.get("RATE_LIMITING_ENABLED", "false").lower() == "true"
+PROCESS_RATE_LIMIT = os.environ.get("RATE_LIMIT", "10000 per day")
+HISTORY_RATE_LIMIT = os.environ.get("HISTORY_RATE_LIMIT", "500000 per day")
 print("RATE_LIMITING_ENABLED from .env", RATE_LIMITING_ENABLED)
-
-if RATE_LIMITING_ENABLED == "true":
-    RATE_LIMIT = os.environ.get("RATE_LIMIT")
-    print("RATE_LIMIT from .env", RATE_LIMIT)
+if RATE_LIMITING_ENABLED:
+    print("RATE_LIMIT from .env", PROCESS_RATE_LIMIT)
+    print("HISTORY_RATE_LIMIT from .env", HISTORY_RATE_LIMIT)
 else:
-    RATE_LIMIT = None
     print("Rate limiting is disabled")
 
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["5 per day"],
+    default_limits=[],
     storage_uri="memory://",
 )
+
+def maybe_limit(limit):
+    def decorator(func):
+        if RATE_LIMITING_ENABLED:
+            return limiter.limit(limit)(func)
+        return func
+    return decorator
 
 # create openai client
 client = OpenAI(
@@ -205,7 +218,7 @@ def find_phrases_timestamps(transcript_data, phrases):
     return results
 
 @app.route("/process", methods=["POST"])
-@limiter.limit(RATE_LIMIT)
+@maybe_limit(PROCESS_RATE_LIMIT)
 def process_audio():
     """
     Expects a multipart/form-data POST with an audio file attached under the key "file".
@@ -221,7 +234,9 @@ def process_audio():
     # save the incoming file with a uuid to prevent conflics/overwrites
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
-    filename = secure_filename(file.filename)
+    fallback_name = f"upload_{uuid.uuid4().hex}"
+    original_filename = os.path.basename(file.filename) or fallback_name
+    filename = secure_filename(original_filename) or fallback_name
     unique_id = uuid.uuid4().hex
     input_file = os.path.join(uploads_dir, unique_id + "_" + filename)
     file.save(input_file)
@@ -245,7 +260,7 @@ def process_audio():
         # using openai to extract advertisement segments
         logger.info("Sending transcription to OpenAI for ad segment detection...")
         phrases_str = openaiGetSegments(transcription_text)
-        logger.info(f"OpenAI response: {phrases_str[:500]}")
+        logger.info("Received ad-segment response from OpenAI")
         try:
             phrases = json.loads(phrases_str)
             logger.info(f"Parsed {len(phrases)} ad segments")
@@ -305,15 +320,18 @@ def process_audio():
 
     # save to history
     db.add_entry(
-        filename=filename,
+        filename=original_filename,
         ad_segments_found=len(matches),
         ad_segments=phrases if phrases else None,
-        transcription_preview=transcription_text,
+        transcription_preview=None,
     )
 
-    # extract the original filename to then create a new filename from it and not return the uuid
-    original_base, _ = os.path.splitext(filename)
-    download_filename = original_base + "_edited.mp3"
+    # preserve the uploaded filename and append [trimmed] before the extension
+    original_base, original_ext = os.path.splitext(original_filename)
+    if original_ext:
+        download_filename = f"{original_base}[trimmed]{original_ext}"
+    else:
+        download_filename = f"{original_filename}[trimmed]"
 
     # return the cleaned audio file
     return send_file(
@@ -324,12 +342,13 @@ def process_audio():
     )
 
 @app.route("/history", methods=["GET"])
+@maybe_limit(HISTORY_RATE_LIMIT)
 def get_history():
     """Returns all processing history entries."""
     entries = db.get_all_entries()
     return jsonify(entries)
 
-@app.route("/history/<entry_id>", methods=["DELETE"])
+@app.route("/history/<int:entry_id>", methods=["DELETE"])
 def delete_history(entry_id):
     """Deletes a single history entry by ID."""
     deleted = db.delete_entry(entry_id)

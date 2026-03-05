@@ -1,67 +1,91 @@
-import sqlite3
 import json
 import os
 from datetime import datetime, timezone
 
-DB_PATH = os.environ.get("DB_PATH", "history.db")
+import psycopg
+from psycopg.rows import dict_row
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
+
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
 
 def init_db():
-    conn = get_connection()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            ad_segments_found INTEGER NOT NULL DEFAULT 0,
-            ad_segments TEXT,
-            transcription_preview TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS history (
+                    id SERIAL PRIMARY KEY,
+                    filename TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    ad_segments_found INTEGER NOT NULL DEFAULT 0,
+                    ad_segments JSONB,
+                    transcription_preview TEXT
+                )
+                """
+            )
+
 
 def add_entry(filename, ad_segments_found, ad_segments=None, transcription_preview=None):
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO history (filename, created_at, ad_segments_found, ad_segments, transcription_preview) VALUES (?, ?, ?, ?, ?)",
-        (
-            filename,
-            datetime.now(timezone.utc).isoformat(),
-            ad_segments_found,
-            json.dumps(ad_segments) if ad_segments else None,
-            transcription_preview[:500] if transcription_preview else None,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    ad_segments_json = json.dumps(ad_segments) if ad_segments else None
+    preview = transcription_preview[:500] if transcription_preview else None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO history (filename, ad_segments_found, ad_segments, transcription_preview)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (filename, ad_segments_found, ad_segments_json, preview),
+            )
+
 
 def get_all_entries():
-    conn = get_connection()
-    rows = conn.execute("SELECT * FROM history ORDER BY created_at DESC").fetchall()
-    conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, filename, created_at, ad_segments_found, ad_segments, transcription_preview
+                FROM history
+                ORDER BY created_at DESC
+                """
+            )
+            rows = cur.fetchall()
+
     entries = []
     for row in rows:
         entry = dict(row)
-        if entry["ad_segments"]:
-            entry["ad_segments"] = json.loads(entry["ad_segments"])
+
+        if isinstance(entry.get("created_at"), datetime):
+            entry["created_at"] = entry["created_at"].astimezone(timezone.utc).isoformat()
+
+        ad_segments = entry.get("ad_segments")
+        if isinstance(ad_segments, str):
+            try:
+                entry["ad_segments"] = json.loads(ad_segments)
+            except json.JSONDecodeError:
+                entry["ad_segments"] = None
+
         entries.append(entry)
+
     return entries
 
+
 def delete_entry(entry_id):
-    conn = get_connection()
-    cursor = conn.execute("DELETE FROM history WHERE id = ?", (entry_id,))
-    conn.commit()
-    deleted = cursor.rowcount > 0
-    conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM history WHERE id = %s", (entry_id,))
+            deleted = cur.rowcount > 0
     return deleted
 
+
 def clear_all():
-    conn = get_connection()
-    conn.execute("DELETE FROM history")
-    conn.commit()
-    conn.close()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM history")

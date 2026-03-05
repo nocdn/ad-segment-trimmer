@@ -44,6 +44,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [lastRequestDurationMs, setLastRequestDurationMs] = useState<number | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [downloadFilename, setDownloadFilename] = useState(DEFAULT_DOWNLOAD_FILENAME)
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([])
@@ -115,6 +116,8 @@ export default function App() {
 
     setIsProcessing(true)
     setErrorMessage(null)
+    setLastRequestDurationMs(null)
+    const requestStartTime = performance.now()
 
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl)
@@ -165,6 +168,7 @@ export default function App() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Request failed")
     } finally {
+      setLastRequestDurationMs(performance.now() - requestStartTime)
       setIsProcessing(false)
     }
   }
@@ -187,6 +191,9 @@ export default function App() {
 
       {isProcessing ? <p>processing...</p> : null}
       {errorMessage ? <p>{errorMessage}</p> : null}
+      {lastRequestDurationMs !== null ? (
+        <p>End-to-end processing time: {(lastRequestDurationMs / 1000).toFixed(2)}s</p>
+      ) : null}
 
       {audioUrl ? (
         <div>

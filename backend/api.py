@@ -4,6 +4,8 @@ import uuid
 import subprocess
 import logging
 import traceback
+import hashlib
+import time
 
 from io import BytesIO
 from flask import Flask, request, send_file, jsonify
@@ -98,6 +100,42 @@ def transcribe(filePath):
         }
         cleaned_words.append(cleaned_word)
     return text, segments, cleaned_words
+
+def compute_file_hash(file_path):
+    """Compute a SHA-256 hash of the file bytes."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as file:
+        while True:
+            chunk = file.read(1024 * 1024)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+def normalise_timestamp_ranges(raw_ranges):
+    """Validate and normalise cached timestamp ranges."""
+    if not isinstance(raw_ranges, list):
+        return None
+
+    normalised = []
+    for item in raw_ranges:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return None
+
+        start, end = item
+        try:
+            start_float = float(start)
+            end_float = float(end)
+        except (TypeError, ValueError):
+            return None
+
+        if start_float < 0 or end_float <= start_float:
+            return None
+
+        normalised.append((start_float, end_float))
+
+    normalised.sort(key=lambda x: x[0])
+    return normalised
 
 def openaiGetSegments(transcriptionText):
     """
@@ -230,6 +268,7 @@ def process_audio():
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
+    request_start_time = time.perf_counter()
 
     # save the incoming file with a uuid to prevent conflics/overwrites
     uploads_dir = "uploads"
@@ -246,35 +285,66 @@ def process_audio():
     base, ext = os.path.splitext(input_file)
     output_file = base + "_edited" + ext
 
-    try:
-        # first, transcribe the audio file
-        logger.info("Starting transcription...")
-        transcription_text, _, transcript_words = transcribe(input_file)
-        logger.info(f"Transcription complete. Text length: {len(transcription_text)}, Words: {len(transcript_words)}")
-    except Exception as e:
-        logger.error(f"Transcription failed: {traceback.format_exc()}")
-        os.remove(input_file)
-        return jsonify({"error": str(e)}), 500
+    audio_hash = compute_file_hash(input_file)
+    logger.info(f"Computed audio hash: {audio_hash}")
 
-    try:
-        # using openai to extract advertisement segments
-        logger.info("Sending transcription to OpenAI for ad segment detection...")
-        phrases_str = openaiGetSegments(transcription_text)
-        logger.info("Received ad-segment response from OpenAI")
+    transcription_text = None
+    phrases = []
+    matches = []
+    cached_processing = db.get_cached_processing_data(audio_hash)
+    if cached_processing:
+        cached_ranges = normalise_timestamp_ranges(cached_processing.get("ad_segment_timestamps"))
+        if cached_ranges is not None:
+            matches = cached_ranges
+            cached_phrases = cached_processing.get("ad_segments")
+            if isinstance(cached_phrases, list):
+                phrases = cached_phrases
+            cached_transcription = cached_processing.get("transcription")
+            if isinstance(cached_transcription, str):
+                transcription_text = cached_transcription
+            logger.info(f"Hash cache hit: found existing processing data for {audio_hash}")
+            logger.info(
+                f"Skipping transcription and ad extraction; reusing {len(matches)} cached timestamp ranges"
+            )
+        else:
+            logger.warning(
+                f"Cache entry for hash {audio_hash} has invalid timestamps, falling back to full processing"
+            )
+            cached_processing = None
+    else:
+        logger.info(f"Hash cache miss: no existing processing data for {audio_hash}")
+
+    if not cached_processing:
+        logger.info("Running transcription and ad extraction for this upload")
         try:
-            phrases = json.loads(phrases_str)
-            logger.info(f"Parsed {len(phrases)} ad segments")
-        except json.JSONDecodeError:
-            logger.warning(f"Failed to parse OpenAI response as JSON, treating as no segments")
-            phrases = []
-    except Exception as e:
-        logger.error(f"OpenAI call failed: {traceback.format_exc()}")
-        os.remove(input_file)
-        return jsonify({"error": f"Error from OpenAI: {str(e)}"}), 500
+            # first, transcribe the audio file
+            logger.info("Starting transcription...")
+            transcription_text, _, transcript_words = transcribe(input_file)
+            logger.info(f"Transcription complete. Text length: {len(transcription_text)}, Words: {len(transcript_words)}")
+        except Exception as e:
+            logger.error(f"Transcription failed: {traceback.format_exc()}")
+            os.remove(input_file)
+            return jsonify({"error": str(e)}), 500
 
-    # find the timestamps of the phrases in the transcript
-    matches = find_phrases_timestamps(transcript_words, phrases)
-    logger.info(f"Found {len(matches)} matching timestamp ranges: {matches}")
+        try:
+            # using openai to extract advertisement segments
+            logger.info("Sending transcription to OpenAI for ad segment detection...")
+            phrases_str = openaiGetSegments(transcription_text)
+            logger.info("Received ad-segment response from OpenAI")
+            try:
+                phrases = json.loads(phrases_str)
+                logger.info(f"Parsed {len(phrases)} ad segments")
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse OpenAI response as JSON, treating as no segments")
+                phrases = []
+        except Exception as e:
+            logger.error(f"OpenAI call failed: {traceback.format_exc()}")
+            os.remove(input_file)
+            return jsonify({"error": f"Error from OpenAI: {str(e)}"}), 500
+
+        # find the timestamps of the phrases in the transcript
+        matches = find_phrases_timestamps(transcript_words, phrases)
+        logger.info(f"Found {len(matches)} matching timestamp ranges: {matches}")
     
     # if no matches found, simply copy the file (i.e. nothing to remove)
     if not matches:
@@ -318,12 +388,17 @@ def process_audio():
     os.remove(input_file)
     os.remove(output_file)
 
+    processing_time_ms = int((time.perf_counter() - request_start_time) * 1000)
+
     # save to history
     db.add_entry(
         filename=original_filename,
         ad_segments_found=len(matches),
         ad_segments=phrases if phrases else None,
-        transcription_preview=None,
+        transcription=transcription_text,
+        audio_hash=audio_hash,
+        ad_segment_timestamps=matches,
+        processing_time_ms=processing_time_ms,
     )
 
     # preserve the uploaded filename and append [trimmed] before the extension

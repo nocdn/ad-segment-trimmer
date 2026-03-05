@@ -7,3 +7,5 @@ venv/
 .venv/
 .env
 *.db
+
+AGENTS.md

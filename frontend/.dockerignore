@@ -1,7 +1,5 @@
 node_modules
+.output
 dist
 .git
-.gitignore
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+bun.lockb

@@ -87,13 +87,14 @@ Install the dependencies:
 ```bash
 cd backend
 uv venv
+source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
 Run the backend:
 
 ```bash
-python app.py
+python api.py
 ```
 
 ##### frontend
@@ -110,6 +111,9 @@ Run the frontend:
 ```bash
 bun run dev
 ```
+
+The frontend scripts automatically load the repo root `../.env` and then `frontend/.env` as an
+override layer, so the normal local setup is to keep the shared configuration in the root `.env`.
 
 ### License
 

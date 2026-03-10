@@ -1,30 +1,38 @@
+import { resolve } from "node:path"
 import tailwindcss from "@tailwindcss/vite"
+import { devtools } from "@tanstack/devtools-vite"
+import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import react from "@vitejs/plugin-react"
-import path from "path"
-import { defineConfig } from "vite"
+import { nitro } from "nitro/vite"
+import { defineConfig, loadEnv } from "vite"
+import tsconfigPaths from "vite-tsconfig-paths"
 
-// https://vite.dev/config/
-export default defineConfig({
-  plugins: [
-    react({
-      babel: {
-        plugins: [["babel-plugin-react-compiler"]],
-      },
-    }),
-    tailwindcss(),
-  ],
-  server: {
-    proxy: {
-      "/api": {
-        target: "http://localhost:7070",
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ""),
-      },
+export default defineConfig(({ mode }) => {
+  const sharedEnv = loadEnv(mode, resolve(process.cwd(), ".."), "")
+  const localEnv = loadEnv(mode, process.cwd(), "")
+
+  for (const [key, value] of Object.entries({ ...sharedEnv, ...localEnv })) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value
+    }
+  }
+
+  return {
+    server: {
+      port: 6030,
     },
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
-  },
+    plugins: [
+      devtools(),
+      nitro({
+        preset: "bun",
+        rollupConfig: {
+          external: [/^@sentry\//],
+        },
+      }),
+      tsconfigPaths({ projects: ["./tsconfig.json"] }),
+      tailwindcss(),
+      tanstackStart(),
+      react(),
+    ],
+  }
 })

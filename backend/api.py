@@ -6,6 +6,8 @@ import logging
 import traceback
 import hashlib
 import time
+import shutil
+from pathlib import Path
 
 from io import BytesIO
 from flask import Flask, request, send_file, jsonify
@@ -15,9 +17,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from werkzeug.utils import secure_filename
 from flask_cors import CORS
-import db
 
-load_dotenv()
+ROOT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(ROOT_ENV_PATH)
+
+import db
 
 app = Flask(__name__)
 CORS(app)
@@ -25,6 +29,9 @@ db.init_db()
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 class ExcludeHistoryGetLogs(logging.Filter):
     def filter(self, record):
@@ -37,8 +44,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
 REASONING_EFFORT = os.environ.get("REASONING_EFFORT")
 FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY")
-print("OPENAI_API_KEY from .env", OPENAI_API_KEY)
-print("FIREWORKS_API_KEY from .env", FIREWORKS_API_KEY)
+INTERNAL_API_SECRET = os.environ.get("INTERNAL_API_SECRET", "local-internal-secret")
+print("OPENAI_API_KEY configured", bool(OPENAI_API_KEY))
+print("FIREWORKS_API_KEY configured", bool(FIREWORKS_API_KEY))
 print("OPENAI_MODEL from .env", OPENAI_MODEL)
 print("REASONING_EFFORT from .env", REASONING_EFFORT)
 
@@ -66,6 +74,18 @@ def maybe_limit(limit):
             return limiter.limit(limit)(func)
         return func
     return decorator
+
+
+def get_internal_user_id():
+    internal_secret = request.headers.get("X-Internal-Api-Secret")
+    if internal_secret != INTERNAL_API_SECRET:
+        return None
+
+    user_id = request.headers.get("X-User-Id")
+    if not user_id:
+        return None
+
+    return user_id
 
 # create openai client
 client = OpenAI(
@@ -171,13 +191,14 @@ def openaiGetSegments(transcriptionText):
     )
     return response.output[1].content[0].text
 
-def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove):
+def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove, concat_manifest_file):
     """
-    Generate an FFmpeg command to remove segments from an audio file.
+    Generate an FFmpeg stream-copy command to remove segments from an audio file.
+    This uses concat demuxer + inpoint/outpoint so FFmpeg can avoid re-encoding.
     segments_to_remove should be a list of (start_time, end_time) tuples (in seconds).
     """
-    if not input_file or not output_file:
-        raise ValueError("Input and output file paths must be provided")
+    if not input_file or not output_file or not concat_manifest_file:
+        raise ValueError("Input, output, and concat manifest file paths must be provided")
     if not segments_to_remove or not isinstance(segments_to_remove, list):
         raise ValueError("segments_to_remove must be a non-empty list of (start, end) tuples")
 
@@ -190,26 +211,38 @@ def generate_ffmpeg_trim_command(input_file, output_file, segments_to_remove):
         if i > 0 and start < segments_to_remove[i-1][1]:
             raise ValueError(f"Segments {i-1} and {i} overlap or are not in ascending order")
 
-    # build FFmpeg filter_complex string
-    filter_parts = []
-    segment_labels = []
-    # extract audio from beginning to start of the first segment
-    filter_parts.append(f"[0:a]atrim=0:{segments_to_remove[0][0]}[s0]")
-    segment_labels.append("[s0]")
-    # extract audio between segments
+    input_path_for_concat = os.path.abspath(input_file).replace("'", "'\\''")
+    keep_ranges = []
+
+    # Keep audio before the first removed segment.
+    first_start = segments_to_remove[0][0]
+    if first_start > 0:
+        keep_ranges.append((0.0, first_start))
+
+    # Keep audio in-between removed segments.
     for i in range(len(segments_to_remove) - 1):
         current_end = segments_to_remove[i][1]
-        next_start = segments_to_remove[i+1][0]
+        next_start = segments_to_remove[i + 1][0]
         if current_end < next_start:
-            filter_parts.append(f"[0:a]atrim={current_end}:{next_start}[s{i+1}]")
-            segment_labels.append(f"[s{i+1}]")
-    # extract audio from the end of the last segment to the end of the file
-    filter_parts.append(f"[0:a]atrim=start={segments_to_remove[-1][1]}[s{len(segments_to_remove)}]")
-    segment_labels.append(f"[s{len(segments_to_remove)}]")
-    concat_filter = f"{''.join(segment_labels)}concat=n={len(segment_labels)}:v=0:a=1[out]"
+            keep_ranges.append((current_end, next_start))
 
-    filter_complex = ";".join(filter_parts) + ";" + concat_filter
-    command = f'ffmpeg -i "{input_file}" -filter_complex "{filter_complex}" -map "[out]" "{output_file}"'
+    # Keep tail audio after the last removed segment.
+    keep_ranges.append((segments_to_remove[-1][1], None))
+
+    manifest_lines = ["ffconcat version 1.0"]
+    for start, end in keep_ranges:
+        manifest_lines.append(f"file '{input_path_for_concat}'")
+        manifest_lines.append(f"inpoint {start:.6f}")
+        if end is not None:
+            manifest_lines.append(f"outpoint {end:.6f}")
+
+    with open(concat_manifest_file, "w", encoding="utf-8") as manifest:
+        manifest.write("\n".join(manifest_lines) + "\n")
+
+    command = (
+        f'ffmpeg -f concat -safe 0 -i "{concat_manifest_file}" '
+        f'-fflags +genpts -avoid_negative_ts make_zero -c copy "{output_file}"'
+    )
     return command
 
 def find_phrases_timestamps(transcript_data, phrases):
@@ -263,6 +296,10 @@ def process_audio():
     It will process the file (transcribe -> extract ad segments -> find those segments' timestamps -> remove those segments via FFmpeg)
     and send back the cleaned audio file. Both input and output files are deleted afterward.
     """
+    user_id = get_internal_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
     file = request.files["file"]
@@ -345,33 +382,49 @@ def process_audio():
         # find the timestamps of the phrases in the transcript
         matches = find_phrases_timestamps(transcript_words, phrases)
         logger.info(f"Found {len(matches)} matching timestamp ranges: {matches}")
+        db.upsert_cached_processing_data(
+            audio_hash=audio_hash,
+            ad_segments=phrases if phrases else [],
+            transcription=transcription_text,
+            ad_segment_timestamps=matches,
+        )
     
+    concat_manifest_file = os.path.join(uploads_dir, unique_id + "_segments.ffconcat")
+
     # if no matches found, simply copy the file (i.e. nothing to remove)
     if not matches:
         logger.info("No ad segments found, copying original file")
-        cmd = f'cp "{input_file}" "{output_file}"'
+        try:
+            shutil.copyfile(input_file, output_file)
+        except Exception as e:
+            logger.error(f"File copy failed: {traceback.format_exc()}")
+            os.remove(input_file)
+            return jsonify({"error": f"Error copying original file: {str(e)}"}), 500
     else:
         try:
-            cmd = generate_ffmpeg_trim_command(input_file, output_file, matches)
+            cmd = generate_ffmpeg_trim_command(input_file, output_file, matches, concat_manifest_file)
             logger.info(f"FFmpeg command: {cmd}")
         except Exception as e:
             logger.error(f"FFmpeg command generation failed: {traceback.format_exc()}")
             os.remove(input_file)
             return jsonify({"error": f"Error generating FFmpeg command: {str(e)}"}), 500
 
-    try:
-        # execute the FFmpeg command to trim the segments
-        logger.info("Executing FFmpeg...")
-        result = subprocess.run(cmd, shell=True, capture_output=True)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg failed: {result.stderr.decode()}")
+        try:
+            # execute the FFmpeg command to trim the segments
+            logger.info("Executing FFmpeg stream-copy trim...")
+            result = subprocess.run(cmd, shell=True, capture_output=True)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg failed: {result.stderr.decode()}")
+                os.remove(input_file)
+                return jsonify({"error": f"FFmpeg command failed: {result.stderr.decode()}"}), 500
+            logger.info("FFmpeg completed successfully")
+        except Exception as e:
+            logger.error(f"FFmpeg execution error: {traceback.format_exc()}")
             os.remove(input_file)
-            return jsonify({"error": f"FFmpeg command failed: {result.stderr.decode()}"}), 500
-        logger.info("FFmpeg completed successfully")
-    except Exception as e:
-        logger.error(f"FFmpeg execution error: {traceback.format_exc()}")
-        os.remove(input_file)
-        return jsonify({"error": f"Error executing FFmpeg command: {str(e)}"}), 500
+            return jsonify({"error": f"Error executing FFmpeg command: {str(e)}"}), 500
+        finally:
+            if os.path.exists(concat_manifest_file):
+                os.remove(concat_manifest_file)
 
     try:
         # read the processed output file
@@ -392,12 +445,10 @@ def process_audio():
 
     # save to history
     db.add_entry(
+        user_id=user_id,
         filename=original_filename,
         ad_segments_found=len(matches),
         ad_segments=phrases if phrases else None,
-        transcription=transcription_text,
-        audio_hash=audio_hash,
-        ad_segment_timestamps=matches,
         processing_time_ms=processing_time_ms,
     )
 
@@ -420,13 +471,21 @@ def process_audio():
 @maybe_limit(HISTORY_RATE_LIMIT)
 def get_history():
     """Returns all processing history entries."""
-    entries = db.get_all_entries()
+    user_id = get_internal_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    entries = db.get_history_for_user(user_id)
     return jsonify(entries)
 
 @app.route("/history/<int:entry_id>", methods=["DELETE"])
 def delete_history(entry_id):
     """Deletes a single history entry by ID."""
-    deleted = db.delete_entry(entry_id)
+    user_id = get_internal_user_id()
+    if not user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    deleted = db.delete_entry(entry_id, user_id)
     if deleted:
         return jsonify({"message": "Entry deleted"})
     return jsonify({"error": "Entry not found"}), 404

@@ -11,18 +11,21 @@ COPY . .
 
 EXPOSE 6030
 
-CMD ["bun", "run", "dev", "--host", "0.0.0.0", "--port", "6030"]
+CMD ["bun", "run", "dev"]
 
 FROM base AS build
 
 COPY . .
 RUN bun run build
 
-FROM nginx:1.27-alpine AS production
+FROM oven/bun:1 AS production
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=6030
+
+COPY --from=build /app/.output ./.output
 
 EXPOSE 6030
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["bun", ".output/server/index.mjs"]

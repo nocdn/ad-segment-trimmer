@@ -22,6 +22,7 @@ bun.lock
 /build
 dist
 dist-ssr
+.output
 
 # misc
 *.local

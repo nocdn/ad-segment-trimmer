@@ -8,12 +8,14 @@ services:
     env_file:
       - .env
     restart: always
-    ports:
-      - "7070:7070"
+    expose:
+      - "7070"
 
   frontend:
     build:
       context: ./frontend
+    env_file:
+      - .env
     ports:
       - "6030:6030"
     depends_on:

@@ -1,9 +1,7 @@
 .DS_Store
-*.pyc
-*.pyo
-*.pyd
-__pycache__
-venv/
-.venv/
 .env
-*.db
+node_modules/
+uploads/
+coverage/
+__pycache__/
+.venv/

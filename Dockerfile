@@ -1,16 +1,19 @@
-FROM ghcr.io/astral-sh/uv:python3.10-bookworm-slim
+FROM oven/bun:1 AS base
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+FROM base AS release
 
-COPY . .
+COPY package.json bun.lock tsconfig.json ./
+RUN bun install --frozen-lockfile --production
+COPY src ./src
+RUN mkdir -p uploads && chown -R bun:bun /usr/src/app
 
-RUN mkdir -p uploads
+USER bun
+EXPOSE 7070/tcp
 
-EXPOSE 7070
-
-CMD ["uv", "run", "api.py"]
+ENTRYPOINT ["bun", "run", "src/index.ts"]

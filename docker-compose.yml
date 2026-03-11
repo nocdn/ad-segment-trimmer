@@ -1,0 +1,11 @@
+services:
+  api:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      PORT: ${PORT:-7070}
+    ports:
+      - "${PORT:-7070}:7070"
+    restart: always

@@ -1,116 +1,126 @@
 # ad-segment-trimmer
 
-> self-hosted REST API (with frontend) to remove ads from audio/video files using OpenAI's Whisper and LLMs
+Self-hosted REST API for removing ad segments from audio files using Fireworks Whisper, OpenAI Responses, FFmpeg, Hono, Bun, and Postgres.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-### How does it work?
+## How it works
 
-A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-V3-Large), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (gpt-5-mini) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmpeg command to remove the segments from the original audio file, and return the cleaned audio file to the user.
+1. `POST /process` accepts an uploaded audio file.
+2. The API computes a SHA-256 hash of the uploaded file.
+3. If that hash already exists in Postgres, the API reuses the saved ad timestamps and skips transcription plus LLM extraction.
+4. Otherwise, Fireworks transcribes the file with `whisper-v3-turbo`, including word timestamps.
+5. OpenAI extracts ad segments from the transcript.
+6. The API matches those phrases back onto transcript timestamps and stores the full transcription plus the exact ad timestamps in Postgres.
+7. FFmpeg removes the matching ranges and returns the edited audio as a download.
 
-### How much does it cost?
+## Requirements
 
-Whisper is billed at $0.0015 per audio minute (billed per second), and gpt-5-mini is billed at $0.25 per million input tokens ($0.00000025 per token), so for an hour long podcast, the process is billed at around ~$0.093 USD (Whisper $0.09 + ~12k input tokens ≈ $0.003).
+- Bun 1.3+
+- FFmpeg
+- Postgres
+- `OPENAI_API_KEY`
+- `FIREWORKS_API_KEY`
 
-### Usage with Docker (recommended)
+## Local development
 
-##### Prerequisites
-
-- [Docker](https://www.docker.com/)
-- [Docker Compose](https://docs.docker.com/compose/)
-
-Clone the repository and navigate to the directory:
-
-```bash
-git clone https://github.com/nocdn/ad-segment-trimmer.git
-cd ad-segment-trimmer/
-```
-
-Copy the `.env.example` file to `.env`:
+Copy the example env file:
 
 ```bash
 cp .env.example .env
 ```
 
-1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
-2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
-3. Set any rate limits you want in the `.env` file (optional).
-4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
-5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
-6. Build the containers and run them:
+Set the required values in `.env`:
+
+- `OPENAI_API_KEY`
+- `FIREWORKS_API_KEY`
+- `DATABASE_URL`
+
+Install dependencies:
 
 ```bash
-docker compose up -d --build
-```
-
-(the `-d` flag runs the container in detached mode, and the `--build` flag rebuilds the image if there are any changes)
-
-There now should be a frontend running at port `6030`, and the API running at port `7070`.
-
-To access the API, you can use the following curl command:
-
-```bash
-curl -F "file=@audio.mp3" -OJ http://localhost:7070/process
-```
-
-(replace `audio.mp3` with the path to your audio file, the -OJ flag will save the file with the returned name with the \_edited suffix)
-
-### Installation for local development
-
-##### Prerequisites
-
-- Python 3.10+
-
-Clone the repository and navigate to the directory:
-
-```bash
-git clone https://github.com/nocdn/ad-segment-trimmer.git
-cd ad-segment-trimmer/
-```
-
-Fill out the .env file by copying the .env.example file:
-
-```bash
-cp .env.example .env
-```
-
-1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
-2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
-3. Set any rate limits you want in the `.env` file (optional).
-4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
-5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
-
-##### backend
-
-Install the dependencies:
-
-```bash
-cd backend
-uv venv
-uv pip install -r requirements.txt
-```
-
-Run the backend:
-
-```bash
-python app.py
-```
-
-##### frontend
-
-Install the dependencies:
-
-```bash
-cd frontend
 bun install
 ```
 
-Run the frontend:
+Run the API in watch mode:
 
 ```bash
 bun run dev
 ```
 
-### License
+Run the API without hot reload:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```bash
+bun run start
+```
+
+The API listens on `http://localhost:7070` by default.
+
+## Docker Compose
+
+The compose file only starts the Bun/Hono API. It does not provision Postgres.
+
+Your `.env` must contain a full external `DATABASE_URL`, and the container will use that exact connection string.
+
+Start the API container:
+
+```bash
+docker compose up -d --build
+```
+
+If your external database is running on your host machine, `localhost` inside the container will not point to the host. In that case, use a host-reachable address in `DATABASE_URL` such as `host.docker.internal` where appropriate for your setup.
+
+## API
+
+### `POST /process`
+
+Send multipart form data with a file under the `file` field:
+
+```bash
+curl -F "file=@audio.mp3" -OJ http://localhost:7070/process
+```
+
+The response is the edited audio file as an attachment, with `[trimmed]` inserted before the extension.
+
+### `GET /history`
+
+Returns processing history as JSON:
+
+```bash
+curl http://localhost:7070/history
+```
+
+### `DELETE /history/:id`
+
+Deletes one history row:
+
+```bash
+curl -X DELETE http://localhost:7070/history/1
+```
+
+## Environment variables
+
+See [`.env.example`](.env.example) for the full list. The main variables are:
+
+- `OPENAI_API_KEY`
+- `FIREWORKS_API_KEY`
+- `OPENAI_MODEL`
+- `REASONING_EFFORT`
+- `DATABASE_URL`
+- `MAX_REQUEST_BODY_SIZE_MB`
+- `FFMPEG_TIMEOUT_MS`
+- `FASTER_FFMPEG_ENABLED`
+- `PORT`
+
+## Notes
+
+- The app automatically recreates the `history` table if its schema does not match the expected columns.
+- Cached entries are keyed by a SHA-256 file hash.
+- `FASTER_FFMPEG_ENABLED=true` uses a faster FFmpeg stream-copy plus concat-demuxer path, which is less precise at cut boundaries than the fallback precise trim mode.
+- No migration scripts are used.
+- `GET /history` is intentionally excluded from request access logs.
+- The app avoids logging full Fireworks/OpenAI payloads such as complete transcripts.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

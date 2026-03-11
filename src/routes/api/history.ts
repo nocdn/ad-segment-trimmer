@@ -1,10 +1,13 @@
 import { createApiAuthMiddleware } from "#/lib/auth-server"
-import { proxyHistoryRequest, responseFromBackend } from "#/lib/backend.server"
+import { getHistoryForUser } from "#/lib/db.server"
+import { checkRateLimit } from "#/lib/rate-limit.server"
 import { createFileRoute } from "@tanstack/react-router"
 
 const historyReadMiddleware = createApiAuthMiddleware({
   history: ["read"],
 })
+
+const HISTORY_RATE_LIMIT = process.env.HISTORY_RATE_LIMIT ?? "500000 per day"
 
 export const Route = createFileRoute("/api/history")({
   server: {
@@ -13,8 +16,14 @@ export const Route = createFileRoute("/api/history")({
         GET: {
           middleware: [historyReadMiddleware],
           handler: async ({ context }) => {
-            const response = await proxyHistoryRequest("/history", "GET", context.auth)
-            return responseFromBackend(response)
+            const rateLimited = checkRateLimit("history", context.auth, HISTORY_RATE_LIMIT)
+
+            if (rateLimited) {
+              return rateLimited
+            }
+
+            const history = await getHistoryForUser(context.auth.userId)
+            return Response.json(history)
           },
         },
       }),

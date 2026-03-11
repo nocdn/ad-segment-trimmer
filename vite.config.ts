@@ -8,19 +8,15 @@ import { defineConfig, loadEnv } from "vite"
 import tsconfigPaths from "vite-tsconfig-paths"
 
 export default defineConfig(({ mode }) => {
-  const sharedEnv = loadEnv(mode, resolve(process.cwd(), ".."), "")
-  const localEnv = loadEnv(mode, process.cwd(), "")
+  const rootEnv = loadEnv(mode, resolve(process.cwd()), "")
 
-  for (const [key, value] of Object.entries({ ...sharedEnv, ...localEnv })) {
+  for (const [key, value] of Object.entries(rootEnv)) {
     if (process.env[key] === undefined) {
       process.env[key] = value
     }
   }
 
   return {
-    server: {
-      port: 6030,
-    },
     plugins: [
       devtools(),
       nitro({

@@ -1,26 +1,9 @@
 services:
-  backend:
+  app:
     build:
-      context: ./backend
-    volumes:
-      - ./backend:/app
-      - uploads_data:/app/uploads
+      context: .
     env_file:
       - .env
     restart: always
-    expose:
-      - "7070"
-
-  frontend:
-    build:
-      context: ./frontend
-    env_file:
-      - .env
     ports:
-      - "6030:6030"
-    depends_on:
-      - backend
-    restart: always
-
-volumes:
-  uploads_data:
+      - "3000:3000"

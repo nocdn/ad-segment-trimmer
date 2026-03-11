@@ -9,6 +9,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-text: var(--text);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-ibm-plex-sans: var(--font-ibm-plex-sans);
@@ -63,6 +64,7 @@
   --radius: 0.625rem;
   --background: #fcfcfc;
   --foreground: oklch(0.145 0 0);
+  --text: #eee;
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
@@ -97,8 +99,9 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: #101010;
   --foreground: oklch(0.985 0 0);
+  --text: #eee;
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
@@ -205,6 +208,44 @@
     0px 0px 0px 1px rgba(15, 23, 42, 0.08),
     0px 1px 2px -1px rgba(15, 23, 42, 0.08),
     0px 2px 4px 0px rgba(15, 23, 42, 0.05);
+}
+
+.ui-dialog-backdrop {
+  opacity: 1;
+  transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ui-dialog-backdrop[data-starting-style],
+.ui-dialog-backdrop[data-ending-style] {
+  opacity: 0;
+}
+
+.ui-dialog-backdrop[data-ending-style] {
+  transition-duration: 200ms;
+}
+
+.ui-dialog-popup {
+  opacity: 1;
+  scale: 1;
+  filter: blur(0px);
+  transition:
+    opacity 300ms cubic-bezier(0.16, 1, 0.3, 1),
+    scale 300ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, scale, filter;
+}
+
+.ui-dialog-popup[data-starting-style] {
+  opacity: 0;
+  scale: 0.98;
+  filter: blur(2px);
+}
+
+.ui-dialog-popup[data-ending-style] {
+  opacity: 0;
+  scale: 0.99;
+  filter: blur(2px);
+  transition-duration: 200ms;
 }
 
 code {
@@ -631,8 +672,9 @@ code {
 
 .dashboard-shell {
   color-scheme: dark;
-  --background: #131517;
+  --background: #101010;
   --foreground: oklch(0.922 0.01 262);
+  --text: #eee;
   --card: oklch(0.215 0.014 262);
   --card-foreground: oklch(0.922 0.01 262);
   --popover: oklch(0.215 0.014 262);
@@ -649,7 +691,7 @@ code {
   --border: oklch(0.322 0.014 262 / 75%);
   --input: oklch(0.29 0.013 262 / 88%);
   --ring: oklch(0.605 0.05 250);
-  --sidebar: #131517;
+  --sidebar: #101010;
   --sidebar-foreground: oklch(0.916 0.01 262);
   --sidebar-primary: oklch(0.705 0.118 71);
   --sidebar-primary-foreground: oklch(0.205 0.012 262);
@@ -657,7 +699,7 @@ code {
   --sidebar-accent-foreground: oklch(0.935 0.008 262);
   --sidebar-border: oklch(0.325 0.014 262 / 78%);
   --sidebar-ring: oklch(0.605 0.05 250);
-  background: #131517;
+  background: #101010;
   overscroll-behavior: none;
 }
 

@@ -14,6 +14,7 @@ import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiProcessRouteImport } from './routes/api/process'
 import { Route as ApiHistoryRouteImport } from './routes/api/history'
+import { Route as ApiApiKeysRouteImport } from './routes/api/api-keys'
 import { Route as AuthedDashboardRouteImport } from './routes/_authed/dashboard'
 import { Route as ApiHistoryEntryIdRouteImport } from './routes/api/history/$entryId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -42,6 +43,11 @@ const ApiHistoryRoute = ApiHistoryRouteImport.update({
   path: '/api/history',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiApiKeysRoute = ApiApiKeysRouteImport.update({
+  id: '/api/api-keys',
+  path: '/api/api-keys',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthedDashboardRoute = AuthedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -62,6 +68,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthedDashboardRoute
+  '/api/api-keys': typeof ApiApiKeysRoute
   '/api/history': typeof ApiHistoryRouteWithChildren
   '/api/process': typeof ApiProcessRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -71,6 +78,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard': typeof AuthedDashboardRoute
+  '/api/api-keys': typeof ApiApiKeysRoute
   '/api/history': typeof ApiHistoryRouteWithChildren
   '/api/process': typeof ApiProcessRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -82,6 +90,7 @@ export interface FileRoutesById {
   '/_authed': typeof AuthedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authed/dashboard': typeof AuthedDashboardRoute
+  '/api/api-keys': typeof ApiApiKeysRoute
   '/api/history': typeof ApiHistoryRouteWithChildren
   '/api/process': typeof ApiProcessRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -93,6 +102,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/api/api-keys'
     | '/api/history'
     | '/api/process'
     | '/api/auth/$'
@@ -102,6 +112,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard'
+    | '/api/api-keys'
     | '/api/history'
     | '/api/process'
     | '/api/auth/$'
@@ -112,6 +123,7 @@ export interface FileRouteTypes {
     | '/_authed'
     | '/login'
     | '/_authed/dashboard'
+    | '/api/api-keys'
     | '/api/history'
     | '/api/process'
     | '/api/auth/$'
@@ -122,6 +134,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   LoginRoute: typeof LoginRoute
+  ApiApiKeysRoute: typeof ApiApiKeysRoute
   ApiHistoryRoute: typeof ApiHistoryRouteWithChildren
   ApiProcessRoute: typeof ApiProcessRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -162,6 +175,13 @@ declare module '@tanstack/react-router' {
       path: '/api/history'
       fullPath: '/api/history'
       preLoaderRoute: typeof ApiHistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/api-keys': {
+      id: '/api/api-keys'
+      path: '/api/api-keys'
+      fullPath: '/api/api-keys'
+      preLoaderRoute: typeof ApiApiKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed/dashboard': {
@@ -215,6 +235,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
   LoginRoute: LoginRoute,
+  ApiApiKeysRoute: ApiApiKeysRoute,
   ApiHistoryRoute: ApiHistoryRouteWithChildren,
   ApiProcessRoute: ApiProcessRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,

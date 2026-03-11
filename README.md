@@ -1,120 +1,97 @@
 # ad-segment-trimmer
 
-> self-hosted REST API (with frontend) to remove ads from audio/video files using OpenAI's Whisper and LLMs
+Self-hosted TanStack Start app for removing ads from audio/video files with Fireworks Whisper, OpenAI, FFmpeg, Better Auth, Drizzle ORM, and Postgres.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## How it works
 
-### How does it work?
+1. Upload a file to `POST /api/process`.
+2. The server transcribes it with Fireworks Whisper (`whisper-v3-turbo`).
+3. The transcript is sent to OpenAI to identify ad segments.
+4. Matching transcript timestamps are converted into an FFmpeg concat manifest.
+5. FFmpeg trims the detected segments and returns the processed file.
+6. Processing history and hash-based cache data are stored in Postgres.
 
-A transcript is made with an API from Fireworks AI, running Whisper (specifically Whisper-V3-Large), an open-source ASR model, which returns an entire transcription, and also word level timestamps, then the entire transcription is sent to an LLM (gpt-5-mini) to extract the entire advertisement segments, then the start_time and end_time of each segment is used to create an FFmpeg command to remove the segments from the original audio file, and return the cleaned audio file to the user.
+## Stack
 
-### How much does it cost?
+- TanStack Start + React + Bun
+- Better Auth for email/password auth and API keys
+- Drizzle ORM for typed Postgres access
+- Postgres for auth, history, and processing cache
+- FFmpeg inside the app container
+- Fireworks AI for transcription
+- OpenAI for ad-segment extraction
 
-Whisper is billed at $0.0015 per audio minute (billed per second), and gpt-5-mini is billed at $0.25 per million input tokens ($0.00000025 per token), so for an hour long podcast, the process is billed at around ~$0.093 USD (Whisper $0.09 + ~12k input tokens ≈ $0.003).
+## Environment
 
-### Usage with Docker (recommended)
+Copy `.env.example` to `.env` and fill in:
 
-##### Prerequisites
+- `OPENAI_API_KEY`
+- `FIREWORKS_API_KEY`
+- `DATABASE_URL`
+- `BETTER_AUTH_SECRET`
+- `BETTER_AUTH_URL`
+- `BETTER_AUTH_TRUSTED_ORIGINS` (optional, comma-separated)
 
-- [Docker](https://www.docker.com/)
-- [Docker Compose](https://docs.docker.com/compose/)
+Notes:
 
-Clone the repository and navigate to the directory:
+- For local dev, `BETTER_AUTH_URL` usually matches `http://localhost:5173`.
+- For Docker / production with the included compose file, `BETTER_AUTH_URL` usually matches `http://localhost:3000`.
+- Tables are created automatically at runtime. No migrations are required.
+- `drizzle.config.ts` is included for schema tooling like Drizzle Studio.
 
-```bash
-git clone https://github.com/nocdn/ad-segment-trimmer.git
-cd ad-segment-trimmer/
-```
-
-Copy the `.env.example` file to `.env`:
+## Docker
 
 ```bash
 cp .env.example .env
-```
-
-1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
-2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
-3. Set any rate limits you want in the `.env` file (optional).
-4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
-5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
-6. Build the containers and run them:
-
-```bash
 docker compose up -d --build
 ```
 
-(the `-d` flag runs the container in detached mode, and the `--build` flag rebuilds the image if there are any changes)
+The app will be available at `http://localhost:3000`.
 
-There now should be a frontend running at port `6030`, and the API running at port `7070`.
-
-To access the API, you can use the following curl command:
-
-```bash
-curl -F "file=@audio.mp3" -OJ http://localhost:7070/process
-```
-
-(replace `audio.mp3` with the path to your audio file, the -OJ flag will save the file with the returned name with the \_edited suffix)
-
-### Installation for local development
-
-##### Prerequisites
-
-- Python 3.10+
-
-Clone the repository and navigate to the directory:
-
-```bash
-git clone https://github.com/nocdn/ad-segment-trimmer.git
-cd ad-segment-trimmer/
-```
-
-Fill out the .env file by copying the .env.example file:
+## Local development
 
 ```bash
 cp .env.example .env
-```
-
-1. Make sure you have an OpenAI API key, as an environment variable called `OPENAI_API_KEY` in the `.env` file.
-2. Make sure you have a Fireworks AI API key, as an environment variable called `FIREWORKS_API_KEY` in the `.env` file.
-3. Set any rate limits you want in the `.env` file (optional).
-4. Set the OpenAI model you want to use, as an environment variable called `OPENAI_MODEL` in the `.env` file.
-5. Set the reasoning effort you want to use, as an environment variable called `REASONING_EFFORT` in the `.env` file.
-
-##### backend
-
-Install the dependencies:
-
-```bash
-cd backend
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
-```
-
-Run the backend:
-
-```bash
-python api.py
-```
-
-##### frontend
-
-Install the dependencies:
-
-```bash
-cd frontend
 bun install
-```
-
-Run the frontend:
-
-```bash
 bun run dev
 ```
 
-The frontend scripts automatically load the repo root `../.env` and then `frontend/.env` as an
-override layer, so the normal local setup is to keep the shared configuration in the root `.env`.
+The dev server will usually be available at `http://localhost:5173`.
 
-### License
+## API
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Better Auth is mounted at `/api/auth/*`.
+
+Protected endpoints:
+
+- `POST /api/process`
+- `GET /api/history`
+- `DELETE /api/history/:entryId`
+
+You can authenticate with either:
+
+- a Better Auth session cookie from the login flow, or
+- an API key passed as `x-api-key`
+
+Example:
+
+```bash
+curl -X POST \
+  -H "x-api-key: YOUR_API_KEY" \
+  -F "file=@audio.mp3" \
+  -OJ http://localhost:3000/api/process
+```
+
+## Scripts
+
+```bash
+bun run dev
+bun run build
+bun run db:studio
+bun run start
+bun run typecheck
+```
+
+## License
+
+MIT

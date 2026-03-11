@@ -1,18 +1,18 @@
 # ad-segment-trimmer
 
-Self-hosted REST API for removing ad segments from audio files using Fireworks Whisper, OpenAI Responses, FFmpeg, Hono, Bun, and Postgres.
+Self-hosted REST API for removing ad segments from audio and video files using Fireworks Whisper, OpenAI Responses, FFmpeg, Hono, Bun, and Postgres.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## How it works
 
-1. `POST /process` accepts an uploaded audio file.
+1. `POST /process` accepts an uploaded audio or video file.
 2. The API computes a SHA-256 hash of the uploaded file.
 3. If that hash already exists in Postgres, the API reuses the saved ad timestamps and skips transcription plus LLM extraction.
 4. Otherwise, Fireworks transcribes the file with `whisper-v3-turbo`, including word timestamps.
 5. OpenAI extracts ad segments from the transcript.
 6. The API matches those phrases back onto transcript timestamps and stores the full transcription plus the exact ad timestamps in Postgres.
-7. FFmpeg removes the matching ranges and returns the edited audio as a download.
+7. FFmpeg removes the matching ranges and returns the edited file as a download.
 
 ## Requirements
 
@@ -111,13 +111,19 @@ The response includes:
 
 ### `POST /process`
 
-Send multipart form data with a file under the `file` field:
+Send multipart form data with an audio or video file under the `file` field:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_API_KEY" -F "file=@audio.mp3" -OJ http://localhost:7070/process
 ```
 
-The response is the edited audio file as an attachment, with `[trimmed]` inserted before the extension.
+Video files work too:
+
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" -F "file=@video.mp4" -OJ http://localhost:7070/process
+```
+
+The API extracts the audio track for transcription and ad detection, then trims those same time ranges from the original audio or video file. The response is the edited file as an attachment, with `[trimmed]` inserted before the extension.
 
 ### `GET /history`
 
@@ -230,6 +236,7 @@ The limiter is stored in memory inside the running app process. If you restart t
 - The app also automatically recreates the `api_keys` table if its schema does not match the expected columns.
 - Cached entries are keyed by a SHA-256 file hash.
 - History and cache entries are isolated per API key.
+- Audio and video uploads are both supported on `/process`. Video uploads are transcribed from their audio track and then trimmed as full video files.
 - `/health` is public and returns `200` when the service is healthy or `503` when an important dependency check fails.
 - `FASTER_FFMPEG_ENABLED=true` uses a faster FFmpeg stream-copy path, which is less precise at cut boundaries than the fallback precise trim mode (settings the variable to `false` uses filter-based re-encoding)
 - No db migration scripts are used.

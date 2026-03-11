@@ -12,6 +12,8 @@ import { logInfo, logWarning } from "./logger.ts";
 const UPLOADS_DIR = "uploads";
 const FIREWORKS_BASE_URL = "https://audio-turbo.api.fireworks.ai/v1";
 const FIREWORKS_MODEL = "whisper-v3-turbo";
+const TRANSCRIPTION_AUDIO_EXTENSION = ".mp3";
+const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mpeg", ".mpg"]);
 const SEGMENT_PROMPT =
   "From the provided podcast transcript, please output all of the advertisement segments. Output them verbatim. Output them as an array of strings with each string being a segment. If a segment is repeated exactly in another part of the transcript, only output it once. DO NOT OUTPUT THEM IN ANY CODEBLOCKS OR BACKTICKS OR ANYTHING, JUST THE ARRAY OF SEGMENTS AS YOUR RESPONSE. This is going into a safety-critical system so it cannot have any code blocks or backticks. Do not change the segments' case, punctuation or capitalization.";
 
@@ -26,11 +28,12 @@ type TranscriptionResult = {
   words: TranscriptWord[];
 };
 
-type ProcessAudioResult = {
-  audioData: Uint8Array;
+type ProcessMediaResult = {
+  fileData: Uint8Array;
   originalFilename: string;
   downloadFilename: string;
   adSegmentsFound: number;
+  responseContentType: string;
 };
 
 type TimestampTuple = [number, number];
@@ -38,6 +41,7 @@ type KeepRange = {
   start: number;
   duration?: number;
 };
+type MediaKind = "audio" | "video";
 
 let openAiClient: OpenAI | null = null;
 let fireworksClient: OpenAI | null = null;
@@ -106,6 +110,7 @@ function createUploadPaths(file: File): {
   originalFilename: string;
   inputPath: string;
   outputPath: string;
+  transcriptionAudioPath: string;
 } {
   const fallbackName = `upload_${randomUUID().replaceAll("-", "")}`;
   const originalFilename = basename(file.name) || fallbackName;
@@ -113,11 +118,13 @@ function createUploadPaths(file: File): {
   const uniqueId = randomUUID().replaceAll("-", "");
   const inputPath = join(UPLOADS_DIR, `${uniqueId}_${safeFilename}`);
   const outputPath = `${inputPath.slice(0, Math.max(0, inputPath.length - extname(inputPath).length))}_edited${extname(inputPath)}`;
+  const transcriptionAudioPath = `${inputPath.slice(0, Math.max(0, inputPath.length - extname(inputPath).length))}_transcription${TRANSCRIPTION_AUDIO_EXTENSION}`;
 
   return {
     originalFilename,
     inputPath,
     outputPath,
+    transcriptionAudioPath,
   };
 }
 
@@ -280,6 +287,60 @@ function generateFfmpegTrimArgs(
   ];
 }
 
+function generateVideoFfmpegTrimArgs(
+  inputPath: string,
+  outputPath: string,
+  segmentsToRemove: TimestampTuple[],
+): string[] {
+  if (!inputPath || !outputPath) {
+    throw new Error("Input and output file paths must be provided");
+  }
+
+  const keepRanges = buildKeepRanges(segmentsToRemove);
+  if (keepRanges.length === 0) {
+    throw new Error("No video ranges to keep");
+  }
+
+  const filterParts: string[] = [];
+  const concatLabels: string[] = [];
+
+  for (let index = 0; index < keepRanges.length; index += 1) {
+    const keepRange = keepRanges[index];
+    if (!keepRange) {
+      continue;
+    }
+
+    const videoTrim =
+      keepRange.duration === undefined
+        ? `trim=start=${keepRange.start}`
+        : `trim=start=${keepRange.start}:end=${keepRange.start + keepRange.duration}`;
+    const audioTrim =
+      keepRange.duration === undefined
+        ? `atrim=start=${keepRange.start}`
+        : `atrim=start=${keepRange.start}:end=${keepRange.start + keepRange.duration}`;
+
+    filterParts.push(`[0:v:0]${videoTrim},setpts=PTS-STARTPTS[v${index}]`);
+    filterParts.push(`[0:a:0]${audioTrim},asetpts=PTS-STARTPTS[a${index}]`);
+    concatLabels.push(`[v${index}]`, `[a${index}]`);
+  }
+
+  const filterComplex = `${filterParts.join(";")};${concatLabels.join("")}concat=n=${keepRanges.length}:v=1:a=1[outv][outa]`;
+
+  return [
+    "ffmpeg",
+    "-y",
+    "-i",
+    inputPath,
+    "-filter_complex",
+    filterComplex,
+    "-map",
+    "[outv]",
+    "-map",
+    "[outa]",
+    outputPath,
+  ];
+}
+
 function buildKeepRanges(segmentsToRemove: TimestampTuple[]): KeepRange[] {
   const normalizedSegments = normalizeSegmentsToRemove(segmentsToRemove);
   const keepRanges: KeepRange[] = [];
@@ -330,10 +391,119 @@ function buildFastTrimSegmentPath(outputPath: string, index: number): string {
   return join(parsed.dir, `${parsed.name}_keep_${index}${extension}`);
 }
 
-async function runPreciseTrim(inputPath: string, outputPath: string, segmentsToRemove: TimestampTuple[]): Promise<void> {
+function isVideoFile(file: File): boolean {
+  if (file.type.startsWith("video/")) {
+    return true;
+  }
+
+  const extension = extname(file.name).toLowerCase();
+  return VIDEO_EXTENSIONS.has(extension);
+}
+
+function getMediaKind(file: File): MediaKind {
+  return isVideoFile(file) ? "video" : "audio";
+}
+
+function getResponseContentType(file: File, mediaKind: MediaKind): string {
+  if (file.type) {
+    return file.type;
+  }
+
+  const extension = extname(file.name).toLowerCase();
+
+  if (extension === ".mp4" || extension === ".m4v") {
+    return "video/mp4";
+  }
+
+  if (extension === ".mov") {
+    return "video/quicktime";
+  }
+
+  if (extension === ".mkv") {
+    return "video/x-matroska";
+  }
+
+  if (extension === ".webm") {
+    return "video/webm";
+  }
+
+  if (extension === ".avi") {
+    return "video/x-msvideo";
+  }
+
+  if (extension === ".mp3") {
+    return "audio/mpeg";
+  }
+
+  if (extension === ".wav") {
+    return "audio/wav";
+  }
+
+  if (extension === ".m4a") {
+    return "audio/mp4";
+  }
+
+  if (extension === ".aac") {
+    return "audio/aac";
+  }
+
+  if (extension === ".ogg") {
+    return "audio/ogg";
+  }
+
+  if (extension === ".flac") {
+    return "audio/flac";
+  }
+
+  if (mediaKind === "video") {
+    return "video/mp4";
+  }
+
+  return "audio/mpeg";
+}
+
+async function extractAudioForTranscription(inputPath: string, outputPath: string): Promise<void> {
+  const command = [
+    "ffmpeg",
+    "-y",
+    "-i",
+    inputPath,
+    "-map",
+    "0:a:0",
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    outputPath,
+  ];
+
+  logInfo("FFmpeg transcription-audio command: %s", formatCommandForLog(command));
+
+  try {
+    await runFfmpeg(command);
+  } catch (error) {
+    const message = getErrorMessage(error);
+    if (message.includes("Stream map") || message.includes("matches no streams")) {
+      throw new Error("Uploaded file does not contain a usable audio stream");
+    }
+
+    throw error;
+  }
+}
+
+async function runPreciseTrim(
+  inputPath: string,
+  outputPath: string,
+  segmentsToRemove: TimestampTuple[],
+  mediaKind: MediaKind,
+): Promise<void> {
   let ffmpegCommand: string[];
   try {
-    ffmpegCommand = generateFfmpegTrimArgs(inputPath, outputPath, segmentsToRemove);
+    ffmpegCommand =
+      mediaKind === "video"
+        ? generateVideoFfmpegTrimArgs(inputPath, outputPath, segmentsToRemove)
+        : generateFfmpegTrimArgs(inputPath, outputPath, segmentsToRemove);
   } catch (error) {
     throw new Error(`Error generating FFmpeg command: ${getErrorMessage(error)}`);
   }
@@ -344,11 +514,16 @@ async function runPreciseTrim(inputPath: string, outputPath: string, segmentsToR
   logInfo("FFmpeg completed successfully");
 }
 
-async function runFastTrim(inputPath: string, outputPath: string, segmentsToRemove: TimestampTuple[]): Promise<void> {
+async function runFastTrim(
+  inputPath: string,
+  outputPath: string,
+  segmentsToRemove: TimestampTuple[],
+  mediaKind: MediaKind,
+): Promise<void> {
   const keepRanges = buildKeepRanges(segmentsToRemove);
   if (keepRanges.length === 0) {
     logWarning("Fast FFmpeg mode produced no keep ranges, falling back to precise trim mode");
-    await runPreciseTrim(inputPath, outputPath, segmentsToRemove);
+    await runPreciseTrim(inputPath, outputPath, segmentsToRemove, mediaKind);
     return;
   }
 
@@ -368,7 +543,12 @@ async function runFastTrim(inputPath: string, outputPath: string, segmentsToRemo
       }
 
       segmentCommand.push("-i", inputPath);
-      segmentCommand.push("-map", "0:a:0", "-c", "copy", segmentPaths[index] ?? outputPath);
+      if (mediaKind === "video") {
+        segmentCommand.push("-map", "0:v:0", "-map", "0:a:0");
+      } else {
+        segmentCommand.push("-map", "0:a:0");
+      }
+      segmentCommand.push("-c", "copy", segmentPaths[index] ?? outputPath);
 
       logInfo("Fast FFmpeg segment command: %s", formatCommandForLog(segmentCommand));
       await runFfmpeg(segmentCommand);
@@ -499,15 +679,16 @@ async function runFfmpeg(command: string[]): Promise<void> {
   }
 }
 
-export async function processUploadedAudio(file: File, apiKeyId: number): Promise<ProcessAudioResult> {
+export async function processUploadedMedia(file: File, apiKeyId: number): Promise<ProcessMediaResult> {
   if (!file.name) {
     throw new Error("No selected file");
   }
 
   await mkdir(UPLOADS_DIR, { recursive: true });
 
-  const { originalFilename, inputPath, outputPath } = createUploadPaths(file);
-  const contentType = file.type || "application/octet-stream";
+  const { originalFilename, inputPath, outputPath, transcriptionAudioPath } = createUploadPaths(file);
+  const mediaKind = getMediaKind(file);
+  const responseContentType = getResponseContentType(file, mediaKind);
 
   await Bun.write(inputPath, file);
   logInfo("Saved uploaded file: %s -> %s", originalFilename, inputPath);
@@ -534,7 +715,8 @@ export async function processUploadedAudio(file: File, apiKeyId: number): Promis
       );
     } else {
       logInfo("Cache miss for file hash %s. Starting transcription...", fileHash);
-      const transcription = await transcribe(inputPath, contentType);
+      await extractAudioForTranscription(inputPath, transcriptionAudioPath);
+      const transcription = await transcribe(transcriptionAudioPath, "audio/mpeg");
       transcriptionText = transcription.text;
       logInfo(
         "Transcription complete. Text length: %s, Words: %s",
@@ -572,16 +754,16 @@ export async function processUploadedAudio(file: File, apiKeyId: number): Promis
     } else {
       if (config.fasterFfmpegEnabled) {
         logInfo("Using faster FFmpeg stream-copy trim mode");
-        await runFastTrim(inputPath, outputPath, normalizedMatches);
+        await runFastTrim(inputPath, outputPath, normalizedMatches, mediaKind);
       } else {
         logInfo("Using precise FFmpeg trim mode");
-        await runPreciseTrim(inputPath, outputPath, normalizedMatches);
+        await runPreciseTrim(inputPath, outputPath, normalizedMatches, mediaKind);
       }
     }
 
-    let audioData: Uint8Array;
+    let fileData: Uint8Array;
     try {
-      audioData = await Bun.file(outputPath).bytes();
+      fileData = await Bun.file(outputPath).bytes();
     } catch (error) {
       throw new Error(`Error reading output file: ${getErrorMessage(error)}`);
     }
@@ -596,13 +778,14 @@ export async function processUploadedAudio(file: File, apiKeyId: number): Promis
     );
 
     return {
-      audioData,
+      fileData,
       originalFilename,
       downloadFilename: buildDownloadFilename(originalFilename),
       adSegmentsFound: normalizedMatches.length,
+      responseContentType,
     };
   } finally {
-    await safeDelete(inputPath, outputPath);
+    await safeDelete(inputPath, outputPath, transcriptionAudioPath);
   }
 }
 

@@ -7,7 +7,7 @@ import { config } from "./config.ts";
 import { deleteEntry, getAllEntries } from "./db.ts";
 import { getHealthStatus } from "./health.ts";
 import { logError, logInfo } from "./logger.ts";
-import { processUploadedAudio, getErrorMessage } from "./processing.ts";
+import { processUploadedMedia, getErrorMessage } from "./processing.ts";
 import { rateLimitMiddleware } from "./rate-limit.ts";
 
 const app = new Hono<{
@@ -59,13 +59,13 @@ app.post(
     }
 
     try {
-      const result = await processUploadedAudio(file, c.get("apiKeyId"));
+      const result = await processUploadedMedia(file, c.get("apiKeyId"));
 
-      return new Response(result.audioData, {
+      return new Response(result.fileData, {
         status: 200,
         headers: {
-          "Content-Type": "audio/mpeg",
-          "Content-Length": String(result.audioData.byteLength),
+          "Content-Type": result.responseContentType,
+          "Content-Length": String(result.fileData.byteLength),
           "Content-Disposition": `attachment; filename="${result.downloadFilename.replace(/["\\]/g, "\\$&")}"`,
         },
       });
@@ -82,14 +82,14 @@ app.post(
         message.startsWith("FFmpeg command failed:") ||
         message.startsWith("Error reading output file:")
       ) {
-        logError("Audio processing failed: %s", message);
+        logError("Media processing failed: %s", message);
         return c.json({ error: message }, 500);
       }
 
       if (message.includes("Authentication") || message.includes("API key")) {
         logError("Transcription or OpenAI authentication failed: %s", message);
       } else {
-        logError("Audio processing failed: %s", message);
+        logError("Media processing failed: %s", message);
       }
 
       return c.json({ error: message }, 500);

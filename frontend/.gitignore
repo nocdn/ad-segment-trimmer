@@ -1,0 +1,110 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+bun.lock
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+dist
+dist-ssr
+
+# misc
+*.local
+.DS_Store
+*.pem
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Logs
+logs
+*.log
+bun-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bun-debug.log*
+lerna-debug.log*
+bun-debug.log*
+.bun-debug.log*
+
+# env files (opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# agent files
+AGENTS.md
+Agents.md
+agents.md
+AGENT.md
+Agent.md
+agent.md
+CLAUDE.md
+Claude.md
+claude.md
+
+# skills directories
+.agents/skills/
+.agent/skills/
+.augment/rules/
+.claude/skills/
+skills/
+.cline/skills/
+.codebuddy/skills/
+.codex/skills/
+.commandcode/skills/
+.continue/skills/
+.crush/skills/
+.cursor/skills/
+.factory/skills/
+.gemini/skills/
+.github/skills/
+.goose/skills/
+.junie/skills/
+.iflow/skills/
+.kilocode/skills/
+.kiro/skills/
+.kode/skills/
+.mcpjam/skills/
+.vibe/skills/
+.opencode/skills/
+.openclaude/skills/
+.openhands/skills/
+.pi/skills/
+.qoder/skills/
+.qwen/skills/
+.roo/skills/
+.trae/skills/
+.windsurf/skills/
+.zencoder/skills/
+.neovate/skills/
+.pochi/skills/
+.adal/skills/
+.mux/skills/

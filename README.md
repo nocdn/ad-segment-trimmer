@@ -56,6 +56,26 @@ bun run start
 
 The API listens on `http://localhost:7070` by default.
 
+Create an API key before calling the API:
+
+```bash
+bun run create-api-key "local client"
+```
+
+If the API is running in Docker, you can also create a key from inside the container:
+
+```bash
+docker compose exec api bun run create-api-key "local client"
+```
+
+The command prints a key in this format:
+
+```text
+abcd1234_secret
+```
+
+The `abcd1234` part is a random public identifier. The full key is only shown once and is stored hashed in the same Postgres database as the rest of the app.
+
 ## Docker Compose
 
 The compose file only starts the Bun/Hono API. It does not provision Postgres.
@@ -72,12 +92,29 @@ If your external database is running on your host machine, `localhost` inside th
 
 ## API
 
+### `GET /health`
+
+Returns a health summary for the service and important dependencies:
+
+```bash
+curl http://localhost:7070/health
+```
+
+The response includes:
+
+- overall service status
+- Postgres connectivity
+- FFmpeg availability
+- whether `OPENAI_API_KEY` is configured
+- whether `FIREWORKS_API_KEY` is configured
+- rate limit configuration status
+
 ### `POST /process`
 
 Send multipart form data with a file under the `file` field:
 
 ```bash
-curl -F "file=@audio.mp3" -OJ http://localhost:7070/process
+curl -H "Authorization: Bearer YOUR_API_KEY" -F "file=@audio.mp3" -OJ http://localhost:7070/process
 ```
 
 The response is the edited audio file as an attachment, with `[trimmed]` inserted before the extension.
@@ -87,7 +124,7 @@ The response is the edited audio file as an attachment, with `[trimmed]` inserte
 Returns processing history as JSON:
 
 ```bash
-curl http://localhost:7070/history
+curl -H "Authorization: Bearer YOUR_API_KEY" http://localhost:7070/history
 ```
 
 ### `DELETE /history/:id`
@@ -95,7 +132,61 @@ curl http://localhost:7070/history
 Deletes one history row:
 
 ```bash
-curl -X DELETE http://localhost:7070/history/1
+curl -H "Authorization: Bearer YOUR_API_KEY" -X DELETE http://localhost:7070/history/1
+```
+
+## API key management
+
+API keys are stored in the same Postgres database as `history`, in an `api_keys` table.
+
+You can manage API keys either from your host machine or from inside the running Docker container. In both cases the commands use the same Postgres database configured by `DATABASE_URL`.
+
+Create a key from the host:
+
+```bash
+bun run create-api-key "my client"
+```
+
+Create a key from the container:
+
+```bash
+docker compose exec api bun run create-api-key "my client"
+```
+
+List keys from the host:
+
+```bash
+bun run list-api-keys
+```
+
+List keys from the container:
+
+```bash
+docker compose exec api bun run list-api-keys
+```
+
+Revoke a key by its public identifier from the host:
+
+```bash
+bun run revoke-api-key abcd1234
+```
+
+Revoke a key by its public identifier from the container:
+
+```bash
+docker compose exec api bun run revoke-api-key abcd1234
+```
+
+Rotate a key from the host:
+
+```bash
+bun run rotate-api-key abcd1234
+```
+
+Rotate a key from the container:
+
+```bash
+docker compose exec api bun run rotate-api-key abcd1234
 ```
 
 ## Environment variables
@@ -108,18 +199,42 @@ See [`.env.example`](.env.example) for the full list. The main variables are:
 - `REASONING_EFFORT`
 - `DATABASE_URL`
 - `MAX_REQUEST_BODY_SIZE_MB`
+- `RATE_LIMIT_ENABLED`
+- `RATE_LIMIT_WINDOW_SECONDS`
+- `RATE_LIMIT_MAX_REQUESTS`
 - `FFMPEG_TIMEOUT_MS`
 - `FASTER_FFMPEG_ENABLED`
 - `PORT`
 
+## Rate limiting
+
+The API uses a simple per-key in-memory rate limiter.
+
+The limiter runs after API key authentication and counts requests separately for each API key. If a key goes over the limit, the API returns `429 Too Many Requests`.
+
+Configure it in `.env`:
+
+```bash
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_MAX_REQUESTS=1
+```
+
+This example means each API key can make up to 1 request per 60-second window.
+
+The limiter is stored in memory inside the running app process. If you restart the app, the counters reset. If you run multiple app containers, each container keeps its own counters.
+
 ## Notes
 
 - The app automatically recreates the `history` table if its schema does not match the expected columns.
+- The app also automatically recreates the `api_keys` table if its schema does not match the expected columns.
 - Cached entries are keyed by a SHA-256 file hash.
-- `FASTER_FFMPEG_ENABLED=true` uses a faster FFmpeg stream-copy plus concat-demuxer path, which is less precise at cut boundaries than the fallback precise trim mode.
-- No migration scripts are used.
+- History and cache entries are isolated per API key.
+- `/health` is public and returns `200` when the service is healthy or `503` when an important dependency check fails.
+- `FASTER_FFMPEG_ENABLED=true` uses a faster FFmpeg stream-copy path, which is less precise at cut boundaries than the fallback precise trim mode (settings the variable to `false` uses filter-based re-encoding)
+- No db migration scripts are used.
 - `GET /history` is intentionally excluded from request access logs.
-- The app avoids logging full Fireworks/OpenAI payloads such as complete transcripts.
+- The app avoids logging full Fireworks/OpenAI payloads such as complete transcripts to avoid cluttering logs with huge transcripts.
 
 ## License
 

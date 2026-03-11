@@ -11,6 +11,7 @@ FROM base AS release
 COPY package.json bun.lock tsconfig.json ./
 RUN bun install --frozen-lockfile --production
 COPY src ./src
+COPY scripts ./scripts
 RUN mkdir -p uploads && chown -R bun:bun /usr/src/app
 
 USER bun

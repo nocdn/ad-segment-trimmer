@@ -499,7 +499,7 @@ async function runFfmpeg(command: string[]): Promise<void> {
   }
 }
 
-export async function processUploadedAudio(file: File): Promise<ProcessAudioResult> {
+export async function processUploadedAudio(file: File, apiKeyId: number): Promise<ProcessAudioResult> {
   if (!file.name) {
     throw new Error("No selected file");
   }
@@ -516,7 +516,7 @@ export async function processUploadedAudio(file: File): Promise<ProcessAudioResu
     const fileHash = await calculateFileHash(inputPath);
     logInfo("Calculated SHA-256 hash for %s: %s", originalFilename, fileHash);
 
-    const cachedEntry = await getEntryByHash(fileHash);
+    const cachedEntry = await getEntryByHash(apiKeyId, fileHash);
     let normalizedMatches: TimestampTuple[] = [];
     let transcriptionText: string | null = null;
 
@@ -587,6 +587,7 @@ export async function processUploadedAudio(file: File): Promise<ProcessAudioResu
     }
 
     await upsertEntry(
+      apiKeyId,
       originalFilename,
       fileHash,
       normalizedMatches.length,

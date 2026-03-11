@@ -5,3 +5,5 @@ uploads/
 coverage/
 __pycache__/
 .venv/
+
+AGENTS.md

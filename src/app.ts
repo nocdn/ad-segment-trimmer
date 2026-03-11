@@ -2,12 +2,20 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 
+import { apiKeyAuthMiddleware } from "./auth.ts";
 import { config } from "./config.ts";
 import { deleteEntry, getAllEntries } from "./db.ts";
+import { getHealthStatus } from "./health.ts";
 import { logError, logInfo } from "./logger.ts";
 import { processUploadedAudio, getErrorMessage } from "./processing.ts";
+import { rateLimitMiddleware } from "./rate-limit.ts";
 
-const app = new Hono();
+const app = new Hono<{
+  Variables: {
+    apiKeyId: number;
+    apiKeyPublicId: string;
+  };
+}>();
 
 app.use("*", cors());
 
@@ -22,6 +30,15 @@ app.use("*", async (c, next) => {
   const durationMs = Math.round(performance.now() - startedAt);
   logInfo('%s %s %s %sms', c.req.method, c.req.path, c.res.status, durationMs);
 });
+
+app.get("/health", async (c) => {
+  const health = await getHealthStatus();
+  const statusCode = health.status === "ok" ? 200 : 503;
+  return c.json(health, statusCode);
+});
+
+app.use("*", apiKeyAuthMiddleware);
+app.use("*", rateLimitMiddleware);
 
 app.post(
   "/process",
@@ -42,7 +59,7 @@ app.post(
     }
 
     try {
-      const result = await processUploadedAudio(file);
+      const result = await processUploadedAudio(file, c.get("apiKeyId"));
 
       return new Response(result.audioData, {
         status: 200,
@@ -81,7 +98,7 @@ app.post(
 );
 
 app.get("/history", async (c) => {
-  const entries = await getAllEntries();
+  const entries = await getAllEntries(c.get("apiKeyId"));
   return c.json(entries);
 });
 
@@ -91,7 +108,7 @@ app.delete("/history/:entryId", async (c) => {
     return c.json({ error: "Entry not found" }, 404);
   }
 
-  const deleted = await deleteEntry(entryId);
+  const deleted = await deleteEntry(c.get("apiKeyId"), entryId);
   if (!deleted) {
     return c.json({ error: "Entry not found" }, 404);
   }

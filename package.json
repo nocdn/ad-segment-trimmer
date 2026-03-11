@@ -5,7 +5,11 @@
   "private": true,
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "create-api-key": "bun run scripts/create-api-key.ts",
+    "list-api-keys": "bun run scripts/list-api-keys.ts",
+    "revoke-api-key": "bun run scripts/revoke-api-key.ts",
+    "rotate-api-key": "bun run scripts/rotate-api-key.ts"
   },
   "dependencies": {
     "hono": "^4.10.1",

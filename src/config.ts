@@ -1,6 +1,8 @@
 const DEFAULT_PORT = 7070;
 const DEFAULT_MAX_REQUEST_BODY_SIZE_MB = 1024;
 const DEFAULT_FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 10;
 
 function getEnv(name: string): string | undefined {
   return Bun.env[name];
@@ -43,6 +45,9 @@ export const config = {
     parseIntegerEnv("MAX_REQUEST_BODY_SIZE_MB", DEFAULT_MAX_REQUEST_BODY_SIZE_MB) * 1024 * 1024,
   ffmpegTimeoutMs: parseIntegerEnv("FFMPEG_TIMEOUT_MS", DEFAULT_FFMPEG_TIMEOUT_MS),
   fasterFfmpegEnabled: parseBooleanEnv("FASTER_FFMPEG_ENABLED", true),
+  rateLimitEnabled: parseBooleanEnv("RATE_LIMIT_ENABLED", true),
+  rateLimitWindowSeconds: parseIntegerEnv("RATE_LIMIT_WINDOW_SECONDS", DEFAULT_RATE_LIMIT_WINDOW_SECONDS),
+  rateLimitMaxRequests: parseIntegerEnv("RATE_LIMIT_MAX_REQUESTS", DEFAULT_RATE_LIMIT_MAX_REQUESTS),
   openAiApiKey: getEnv("OPENAI_API_KEY"),
   fireworksApiKey: getEnv("FIREWORKS_API_KEY"),
   openAiModel: getEnv("OPENAI_MODEL") ?? "gpt-5-mini",

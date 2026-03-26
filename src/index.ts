@@ -7,6 +7,8 @@ await initDb();
 
 logInfo("OPENAI_API_KEY configured: %s", Boolean(config.openAiApiKey));
 logInfo("FIREWORKS_API_KEY configured: %s", Boolean(config.fireworksApiKey));
+logInfo("MISTRAL_API_KEY configured: %s", Boolean(config.mistralApiKey));
+logInfo("TRANSCRIPTION_PROVIDER from .env %s", config.transcriptionProvider);
 logInfo("OPENAI_MODEL from .env %s", config.openAiModel);
 logInfo("REASONING_EFFORT from .env %s", config.reasoningEffort);
 logInfo("FASTER_FFMPEG_ENABLED from .env %s", config.fasterFfmpegEnabled);

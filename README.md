@@ -1,6 +1,6 @@
 # ad-segment-trimmer
 
-Self-hosted REST API for removing ad segments from audio and video files using Fireworks Whisper, OpenAI Responses, FFmpeg, Hono, Bun, and Postgres.
+Self-hosted REST API for removing ad segments from audio and video files using Fireworks or Mistral transcription, OpenAI Responses, FFmpeg, Hono, Bun, and Postgres.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -9,10 +9,12 @@ Self-hosted REST API for removing ad segments from audio and video files using F
 1. `POST /process` accepts an uploaded audio or video file.
 2. The API computes a SHA-256 hash of the uploaded file.
 3. If that hash already exists in Postgres, the API reuses the saved ad timestamps and skips transcription plus LLM extraction.
-4. Otherwise, Fireworks transcribes the file with `whisper-v3-turbo`, including word timestamps.
+4. Otherwise, the configured transcription provider transcribes the file.
 5. OpenAI extracts ad segments from the transcript.
 6. The API matches those phrases back onto transcript timestamps and stores the full transcription plus the exact ad timestamps in Postgres.
 7. FFmpeg removes the matching ranges and returns the edited file as a download.
+
+The app supports two transcription providers. Fireworks uses `whisper-v3-turbo`. Mistral uses `voxtral-mini-latest`, which the Mistral docs describe as the transcription-only service on the audio transcription endpoint and currently map to `voxtral-mini-2602` for transcription.
 
 ## Requirements
 
@@ -20,7 +22,9 @@ Self-hosted REST API for removing ad segments from audio and video files using F
 - FFmpeg
 - Postgres
 - `OPENAI_API_KEY`
-- `FIREWORKS_API_KEY`
+- `TRANSCRIPTION_PROVIDER`
+- `FIREWORKS_API_KEY` when `TRANSCRIPTION_PROVIDER=fireworks`
+- `MISTRAL_API_KEY` when `TRANSCRIPTION_PROVIDER=mistral`
 
 ## Local development
 
@@ -33,7 +37,8 @@ cp .env.example .env
 Set the required values in `.env`:
 
 - `OPENAI_API_KEY`
-- `FIREWORKS_API_KEY`
+- `TRANSCRIPTION_PROVIDER`
+- `FIREWORKS_API_KEY` or `MISTRAL_API_KEY`
 - `DATABASE_URL`
 
 Install dependencies:
@@ -106,7 +111,7 @@ The response includes:
 - Postgres connectivity
 - FFmpeg availability
 - whether `OPENAI_API_KEY` is configured
-- whether `FIREWORKS_API_KEY` is configured
+- which transcription provider is active and whether its API key is configured
 - rate limit configuration status
 
 ### `POST /process`
@@ -200,7 +205,9 @@ docker compose exec api bun run rotate-api-key abcd1234
 See [`.env.example`](.env.example) for the full list. The main variables are:
 
 - `OPENAI_API_KEY`
+- `TRANSCRIPTION_PROVIDER`
 - `FIREWORKS_API_KEY`
+- `MISTRAL_API_KEY`
 - `OPENAI_MODEL`
 - `REASONING_EFFORT`
 - `DATABASE_URL`
@@ -238,6 +245,8 @@ The limiter is stored in memory inside the running app process. If you restart t
 - History and cache entries are isolated per API key.
 - Audio and video uploads are both supported on `/process`. Video uploads are transcribed from their audio track and then trimmed as full video files.
 - `/health` is public and returns `200` when the service is healthy or `503` when an important dependency check fails.
+- `TRANSCRIPTION_PROVIDER=fireworks` uses `whisper-v3-turbo` and supports timestamp-based trimming.
+- `TRANSCRIPTION_PROVIDER=mistral` uses `voxtral-mini-latest` on `POST /v1/audio/transcriptions` and requests `timestamp_granularities=["word"]` so the app can match transcript phrases back to audio timestamps.
 - `FASTER_FFMPEG_ENABLED=true` uses a faster FFmpeg stream-copy path, which is less precise at cut boundaries than the fallback precise trim mode (settings the variable to `false` uses filter-based re-encoding)
 - No db migration scripts are used.
 - `GET /history` is intentionally excluded from request access logs.

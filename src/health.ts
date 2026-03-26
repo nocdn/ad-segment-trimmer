@@ -17,7 +17,7 @@ type HealthResponse = {
     database: HealthCheck;
     ffmpeg: HealthCheck;
     openai_api_key: HealthCheck;
-    fireworks_api_key: HealthCheck;
+    transcription_provider: HealthCheck;
     rate_limit: HealthCheck;
   };
 };
@@ -73,11 +73,29 @@ function checkConfigured(value: string | undefined, name: string): HealthCheck {
   };
 }
 
+function checkTranscriptionProvider(): HealthCheck {
+  const provider = config.transcriptionProvider;
+
+  if (provider === "mistral") {
+    const keyCheck = checkConfigured(config.mistralApiKey, "MISTRAL_API_KEY");
+    return {
+      status: keyCheck.status,
+      message: `provider: mistral - ${keyCheck.message}`,
+    };
+  }
+
+  const keyCheck = checkConfigured(config.fireworksApiKey, "FIREWORKS_API_KEY");
+  return {
+    status: keyCheck.status,
+    message: `provider: fireworks - ${keyCheck.message}`,
+  };
+}
+
 export async function getHealthStatus(): Promise<HealthResponse> {
   const databaseCheck = await checkDatabaseHealth();
   const ffmpegCheck = await checkFfmpegHealth();
   const openAiCheck = checkConfigured(config.openAiApiKey, "OPENAI_API_KEY");
-  const fireworksCheck = checkConfigured(config.fireworksApiKey, "FIREWORKS_API_KEY");
+  const transcriptionProviderCheck = checkTranscriptionProvider();
   const rateLimitCheck = {
     status: "ok" as const,
     message: config.rateLimitEnabled
@@ -93,7 +111,7 @@ export async function getHealthStatus(): Promise<HealthResponse> {
     database: databaseCheck,
     ffmpeg: ffmpegCheck,
     openai_api_key: openAiCheck,
-    fireworks_api_key: fireworksCheck,
+    transcription_provider: transcriptionProviderCheck,
     rate_limit: rateLimitCheck,
   };
 
@@ -101,7 +119,7 @@ export async function getHealthStatus(): Promise<HealthResponse> {
     databaseCheck.status === "ok" &&
     ffmpegCheck.status === "ok" &&
     openAiCheck.status === "ok" &&
-    fireworksCheck.status === "ok"
+    transcriptionProviderCheck.status === "ok"
       ? "ok"
       : "error";
 

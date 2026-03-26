@@ -6,12 +6,14 @@ import { mkdir, unlink } from "node:fs/promises";
 import OpenAI from "openai";
 
 import { getEntryByHash, type TimestampRange, upsertEntry } from "./db.ts";
-import { config } from "./config.ts";
+import { config, type TranscriptionProvider } from "./config.ts";
 import { logInfo, logWarning } from "./logger.ts";
 
 const UPLOADS_DIR = "uploads";
 const FIREWORKS_BASE_URL = "https://audio-turbo.api.fireworks.ai/v1";
 const FIREWORKS_MODEL = "whisper-v3-turbo";
+const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+const MISTRAL_MODEL = "voxtral-mini-latest";
 const TRANSCRIPTION_AUDIO_EXTENSION = ".mp3";
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mpeg", ".mpg"]);
 const SEGMENT_PROMPT =
@@ -26,6 +28,19 @@ export type TranscriptWord = {
 type TranscriptionResult = {
   text: string;
   words: TranscriptWord[];
+};
+
+type MistralTimestampChunk = {
+  text?: string;
+  word?: string;
+  start?: number;
+  end?: number;
+  words?: MistralTimestampChunk[];
+};
+
+type MistralTranscriptionResponse = {
+  text?: string;
+  segments?: MistralTimestampChunk[];
 };
 
 type ProcessMediaResult = {
@@ -599,7 +614,7 @@ async function calculateFileHash(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function transcribe(filePath: string, contentType: string): Promise<TranscriptionResult> {
+async function transcribeWithFireworks(filePath: string, contentType: string): Promise<TranscriptionResult> {
   const file = new File([Bun.file(filePath)], basename(filePath), {
     type: contentType || "application/octet-stream",
   });
@@ -622,6 +637,101 @@ async function transcribe(filePath: string, contentType: string): Promise<Transc
     text: (response as { text?: string }).text ?? "",
     words,
   };
+}
+
+function readMistralWordChunks(chunks: MistralTimestampChunk[] | undefined): TranscriptWord[] {
+  if (!chunks || chunks.length === 0) {
+    return [];
+  }
+
+  const words: TranscriptWord[] = [];
+
+  for (const chunk of chunks) {
+    if (Array.isArray(chunk.words) && chunk.words.length > 0) {
+      words.push(...readMistralWordChunks(chunk.words));
+      continue;
+    }
+
+    const rawText = typeof chunk.word === "string" ? chunk.word : chunk.text;
+    if (typeof rawText !== "string") {
+      continue;
+    }
+
+    if (typeof chunk.start !== "number" || typeof chunk.end !== "number") {
+      continue;
+    }
+
+    const trimmedText = rawText.trim();
+    if (!trimmedText) {
+      continue;
+    }
+
+    const splitWords = trimmedText.split(/\s+/).filter(Boolean);
+    if (splitWords.length !== 1) {
+      continue;
+    }
+
+    words.push({
+      word: splitWords[0] ?? trimmedText,
+      start: chunk.start,
+      end: chunk.end,
+    });
+  }
+
+  return words;
+}
+
+async function transcribeWithMistral(filePath: string, contentType: string): Promise<TranscriptionResult> {
+  if (!config.mistralApiKey) {
+    throw new Error("MISTRAL_API_KEY is required when using Mistral as the transcription provider");
+  }
+
+  const fileBuffer = await Bun.file(filePath).arrayBuffer();
+  const fileName = basename(filePath);
+
+  const formData = new FormData();
+  formData.append("file", new File([fileBuffer], fileName, { type: contentType || "application/octet-stream" }));
+  formData.append("model", MISTRAL_MODEL);
+  formData.append("timestamp_granularities", "word");
+
+  const response = await fetch(`${MISTRAL_BASE_URL}/audio/transcriptions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.mistralApiKey}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Mistral transcription failed (${response.status}): ${errorBody}`);
+  }
+
+  const data = (await response.json()) as MistralTranscriptionResponse;
+
+  return {
+    text: data.text ?? "",
+    words: readMistralWordChunks(data.segments),
+  };
+}
+
+function getTranscriptionProviderLabel(provider: TranscriptionProvider): string {
+  if (provider === "mistral") {
+    return "Mistral";
+  }
+
+  return "Fireworks";
+}
+
+async function transcribe(filePath: string, contentType: string): Promise<TranscriptionResult> {
+  const providerLabel = getTranscriptionProviderLabel(config.transcriptionProvider);
+  logInfo("Using %s transcription provider", providerLabel);
+
+  if (config.transcriptionProvider === "mistral") {
+    return transcribeWithMistral(filePath, contentType);
+  }
+
+  return transcribeWithFireworks(filePath, contentType);
 }
 
 async function extractAdSegments(transcriptionText: string): Promise<string[]> {
@@ -732,6 +842,16 @@ export async function processUploadedMedia(file: File, apiKeyId: number): Promis
         logInfo("Parsed %s ad segments", adSegments.length);
       } catch (error) {
         throw new Error(`Error from OpenAI: ${getErrorMessage(error)}`);
+      }
+
+      if (adSegments.length > 0 && transcription.words.length === 0) {
+        logWarning(
+          "Transcription provider did not return word-level timestamps. Ad segments were detected but cannot be matched to timestamps for trimming.",
+        );
+
+        throw new Error(
+          "The active transcription provider did not return word-level timestamps. This app needs word-level timestamps to trim detected ad segments.",
+        );
       }
 
       const rawMatches = findPhraseTimestamps(transcription.words, adSegments);
